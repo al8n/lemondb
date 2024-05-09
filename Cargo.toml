@@ -15,9 +15,17 @@ name = "foo"
 harness = false
 
 [features]
-default = []
+default = ["std"]
+alloc = []
+std = ["bytes/default", "either/default", "skl/memmap", "thiserror", "memmap2"]
 
 [dependencies]
+bytes = { version = "1", default-features = false }
+either = { version = "1", default-features = false }
+memmap2 = { version = "0.9", optional = true }
+skl = { version = "0.8", default-features = false }
+thiserror = { version = "1", optional = true }
+viewit = "0.1.5"
 
 [dev-dependencies]
 criterion = "0.5"
