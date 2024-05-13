@@ -13,8 +13,13 @@ extern crate alloc as std;
 #[cfg(not(any(feature = "std", feature = "alloc")))]
 compile_error!("This crate requires either the 'std' or 'alloc' feature to be enabled.");
 
-mod lf;
-mod vlf;
+/// Options for configuring the database.
+pub mod options;
+
+mod wal;
+
+mod db;
+pub use db::*;
 
 mod types;
 pub use types::*;

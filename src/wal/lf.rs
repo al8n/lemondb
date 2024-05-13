@@ -1,4 +1,4 @@
-use super::*;
+use super::{options::*, *};
 
 use core::{
   cell::RefCell,
@@ -6,6 +6,7 @@ use core::{
 };
 use std::io;
 
+use bytes::Bytes;
 use skl::SkipMap;
 
 pub use skl::{Ascend, Comparator, Descend, OccupiedValue};
@@ -15,80 +16,10 @@ use either::Either;
 mod iterator;
 pub use iterator::*;
 
-const EXTENSION: &str = "skl";
-
-/// The options for creating a log.
-#[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
-#[derive(Debug, Clone, Copy)]
-pub struct CreateOptions {
-  /// The file ID of the log.
-  #[viewit(
-    getter(const, attrs(doc = "Returns the file ID of the log.")),
-    setter(attrs(doc = "Sets the file ID of the log."))
-  )]
-  fid: u32,
-
-  /// The maximum size of the log.
-  ///
-  /// The log is backed by a mmaped file with the given size.
-  /// So this size determines the mmaped file size.
-  #[viewit(
-    getter(const, attrs(doc = "Returns the size of the log.")),
-    setter(attrs(doc = "Sets the size of the log."))
-  )]
-  size: usize,
-
-  /// Whether to lock the log.
-  ///
-  /// If `true`, the log will be locked exlusively when it is created.
-  #[viewit(
-    getter(const, attrs(doc = "Returns if we should lock the log.")),
-    setter(attrs(doc = "Sets whether to lock the log."))
-  )]
-  lock: bool,
-
-  /// Whether to sync on write.
-  ///
-  /// If `true`, the log will sync the data to disk on write.
-  #[viewit(
-    getter(const, attrs(doc = "Returns if we should sync on write.")),
-    setter(attrs(doc = "Sets whether to sync on write."))
-  )]
-  sync_on_write: bool,
-
-  /// Whether to open in-memory log.
-  ///
-  /// If `true`, the log will be opened in memory.
-  #[viewit(
-    getter(const, attrs(doc = "Returns if we should open in-memory log.")),
-    setter(attrs(doc = "Sets whether to open in-memory log."))
-  )]
-  in_memory: bool,
-}
-
-/// The options for opening a log.
-#[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
-#[derive(Debug, Clone, Copy)]
-pub struct OpenOptions {
-  /// The file ID of the log.
-  #[viewit(
-    getter(const, attrs(doc = "Returns the file ID of the log.")),
-    setter(attrs(doc = "Sets the file ID of the log."))
-  )]
-  fid: u32,
-
-  /// Whether to lock the log.
-  ///
-  /// If `true`, the log will be locked exlusively when it is created.
-  #[viewit(
-    getter(const, attrs(doc = "Returns if we should lock the log.")),
-    setter(attrs(doc = "Sets whether to lock the log."))
-  )]
-  lock: bool,
-}
+const EXTENSION: &str = "klog";
 
 std::thread_local! {
-  static BUF: RefCell<std::string::String> = RefCell::new(std::string::String::with_capacity(9));
+  static BUF: RefCell<std::string::String> = RefCell::new(std::string::String::with_capacity(10));
 }
 
 /// Errors that can occur when working with a log.
@@ -142,6 +73,8 @@ pub struct LogFile<C = Ascend> {
   fid: u32,
   sync_on_write: bool,
   ro: bool,
+  minimum: Option<Bytes>,
+  maximum: Option<Bytes>,
 }
 
 impl<C> LogFile<C> {
@@ -193,12 +126,14 @@ impl<C: Comparator> LogFile<C> {
     use std::fmt::Write;
 
     if opts.in_memory {
-      return SkipMap::<Meta, C>::with_comparator(opts.size, cmp)
+      return SkipMap::<Meta, C>::with_comparator(opts.size as usize, cmp)
         .map(|map| Self {
           map,
           fid: opts.fid,
           sync_on_write: opts.sync_on_write,
           ro: false,
+          minimum: None,
+          maximum: None,
         })
         .map_err(Into::into);
     }
@@ -207,12 +142,14 @@ impl<C: Comparator> LogFile<C> {
       let mut buf = buf.borrow_mut();
       buf.clear();
       write!(buf, "{:05}.{}", opts.fid, EXTENSION).unwrap();
-      SkipMap::<Meta, C>::mmap_mut_with_comparator(buf.as_str(), opts.size, opts.lock, cmp)
+      SkipMap::<Meta, C>::mmap_mut_with_comparator(buf.as_str(), opts.size as usize, opts.lock, cmp)
         .map(|map| Self {
           map,
           fid: opts.fid,
           sync_on_write: opts.sync_on_write,
           ro: false,
+          minimum: None,
+          maximum: None,
         })
         .map_err(Into::into)
     })
@@ -226,6 +163,8 @@ impl<C: Comparator> LogFile<C> {
         fid: opts.fid,
         sync_on_write: opts.sync_on_write,
         ro: false,
+        minimum: None,
+        maximum: None,
       })
       .map_err(Into::into)
   }
@@ -242,11 +181,22 @@ impl<C: Comparator> LogFile<C> {
       let mut buf = buf.borrow_mut();
       buf.clear();
       write!(buf, "{:05}.{}", opts.fid, EXTENSION).unwrap();
-      SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), opts.lock, cmp).map(|map| Self {
-        map,
-        fid: opts.fid,
-        sync_on_write: false,
-        ro: true,
+      SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), opts.lock, cmp).map(|map| {
+        let max_version = map.max_version();
+        let minimum = map.first(max_version).map(|ent| {
+          Bytes::copy_from_slice(ent.key())
+        });
+        let maximum = map.last(max_version).map(|ent| {
+          Bytes::copy_from_slice(ent.key())
+        });
+        Self {
+          map,
+          fid: opts.fid,
+          sync_on_write: false,
+          ro: true,
+          minimum,
+          maximum,
+        }
       })
     })
   }
@@ -332,6 +282,19 @@ impl<C: Comparator> LogFile<C> {
   /// Returns `true` if the log contains the given key.
   #[inline]
   pub fn contains_key(&self, version: u64, key: &[u8]) -> bool {
+    // fast path
+    if let Some(maximum) = &self.maximum {
+      if self.map.comparator().compare(key, maximum) == core::cmp::Ordering::Greater {
+        return false;
+      }
+    }
+
+    if let Some(minimum) = &self.minimum {
+      if self.map.comparator().compare(key, minimum) == core::cmp::Ordering::Less {
+        return false;
+      }
+    }
+
     self.get(version, key).is_some()
   }
 

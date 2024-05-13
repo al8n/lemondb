@@ -1,12 +1,12 @@
 [package]
-name = "template-rs"
-version = "0.1.6"
+name = "lemondb"
+version = "0.0.0"
 edition = "2021"
-repository = "https://github.com/al8n/template-rs"
-homepage = "https://github.com/al8n/template-rs"
-documentation = "https://docs.rs/template-rs"
+repository = "https://github.com/al8n/lemondb"
+homepage = "https://github.com/al8n/lemondb"
+documentation = "https://docs.rs/lemondb"
 description = "A template for creating Rust open-source repo on GitHub"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 rust-version = "1.73"
 
 [[bench]]
@@ -17,15 +17,37 @@ harness = false
 [features]
 default = ["std"]
 alloc = []
-std = ["bytes/default", "either/default", "skl/memmap", "thiserror", "memmap2"]
+std = [
+  "bytes/default",
+  "crossbeam-skiplist/default",
+  "either/default",
+  "skl/memmap",
+  "thiserror",
+  "memmap2",
+  "fs4",
+  "indexmap/default",
+  "atomic_refcell/default",
+  "quick_cache",
+]
 
 [dependencies]
+atomic_refcell = { version = "0.1", default-features = false }
 bytes = { version = "1", default-features = false }
+crc32fast = "1"
+crossbeam-skiplist = { version = "0.1", default-features = false }
+derive_more = "0.99"
+enum_dispatch = "0.3"
 either = { version = "1", default-features = false }
+fs4 = { version = "0.8", optional = true }
+indexmap = { version = "2", default-features = false }
 memmap2 = { version = "0.9", optional = true }
+quick_cache = { version = "0.5", optional = true }
 skl = { version = "0.8", default-features = false }
 thiserror = { version = "1", optional = true }
+tracing = "0.1"
 viewit = "0.1.5"
+
+
 
 [dev-dependencies]
 criterion = "0.5"
