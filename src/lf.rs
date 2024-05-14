@@ -183,12 +183,12 @@ impl<C: Comparator> LogFile<C> {
       write!(buf, "{:05}.{}", opts.fid, EXTENSION).unwrap();
       SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), opts.lock, cmp).map(|map| {
         let max_version = map.max_version();
-        let minimum = map.first(max_version).map(|ent| {
-          Bytes::copy_from_slice(ent.key())
-        });
-        let maximum = map.last(max_version).map(|ent| {
-          Bytes::copy_from_slice(ent.key())
-        });
+        let minimum = map
+          .first(max_version)
+          .map(|ent| Bytes::copy_from_slice(ent.key()));
+        let maximum = map
+          .last(max_version)
+          .map(|ent| Bytes::copy_from_slice(ent.key()));
         Self {
           map,
           fid: opts.fid,

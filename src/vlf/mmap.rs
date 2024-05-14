@@ -4,7 +4,7 @@ use std::{fmt::Write, fs::File, io::Write as _};
 use fs4::FileExt;
 use memmap2::{Mmap, MmapMut, MmapOptions};
 
-use super::{error::Error, options::*, *};
+use super::*;
 
 const EXTENSION: &str = "vlog";
 const CHECKSUM_OVERHEAD: u64 = 4;
@@ -75,7 +75,7 @@ pub struct MmapValueLog {
 
 impl MmapValueLog {
   #[inline]
-  pub fn create(opts: CreateOptions) -> Result<Self, Error> {
+  pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
     BUF.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
@@ -108,7 +108,7 @@ impl MmapValueLog {
     })
   }
 
-  pub fn open(opts: OpenOptions) -> Result<Self, Error> {
+  pub fn open(opts: OpenOptions) -> Result<Self, ValueLogError> {
     BUF.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
@@ -138,9 +138,9 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, Error> {
+  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, ValueLogError> {
     if self.ro {
-      return Err(Error::ReadOnly);
+      return Err(ValueLogError::ReadOnly);
     }
 
     match self.buf {
@@ -148,7 +148,7 @@ impl MmapValueLog {
         let len = data.len();
         let offset = self.len as usize;
         if offset as u64 + len as u64 + CHECKSUM_OVERHEAD > self.cap {
-          return Err(Error::NotEnoughSpace {
+          return Err(ValueLogError::NotEnoughSpace {
             required: len as u64,
             remaining: self.cap - offset as u64,
           });
@@ -156,25 +156,26 @@ impl MmapValueLog {
 
         mmap[offset..offset + len].copy_from_slice(data);
         let cks = crc32fast::hash(&mmap[offset..offset + len]);
-        mmap[offset + len..offset + len + CHECKSUM_OVERHEAD as usize].copy_from_slice(&cks.to_le_bytes());
+        mmap[offset + len..offset + len + CHECKSUM_OVERHEAD as usize]
+          .copy_from_slice(&cks.to_le_bytes());
         self.len += len as u64 + CHECKSUM_OVERHEAD;
         Ok(ValuePointer::new(self.fid, len as u64, offset as u64))
       }
-      Memmap::Map { .. } => Err(Error::ReadOnly),
-      _ => Err(Error::Closed),
+      Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
+      _ => Err(ValueLogError::Closed),
     }
   }
 
   #[inline]
-  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], Error> {
+  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     Ok(if offset as u64 + size as u64 <= self.cap {
       match self.buf {
         Memmap::Map { ref mmap, .. } => &mmap[offset..offset + size],
         Memmap::MapMut { ref mmap, .. } => &mmap[offset..offset + size],
-        _ => return Err(Error::Closed),
+        _ => return Err(ValueLogError::Closed),
       }
     } else {
-      return Err(Error::OutOfBound {
+      return Err(ValueLogError::OutOfBound {
         offset,
         len: size,
         size: self.len,
@@ -183,9 +184,9 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub fn rewind(&mut self, size: usize) -> Result<(), Error> {
+  pub fn rewind(&mut self, size: usize) -> Result<(), ValueLogError> {
     if self.ro {
-      return Err(Error::ReadOnly);
+      return Err(ValueLogError::ReadOnly);
     }
 
     self.len = self.len.saturating_sub(size as u64);

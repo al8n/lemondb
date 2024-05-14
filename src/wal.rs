@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use atomic_refcell::AtomicRefCell;
 use crossbeam_skiplist::SkipMap;
-use indexmap::IndexMap;
 use lf::LogFile;
+use manifest::ManifestFile;
 #[cfg(feature = "std")]
 use quick_cache::sync::Cache;
 use skl::Ascend;
@@ -11,20 +10,12 @@ use vlf::ValueLog;
 
 use super::*;
 
-#[cfg(feature = "std")]
-mod cache;
-
-mod lf;
-mod manifest;
-mod vlf;
-
 pub struct Wal<C = Ascend> {
+  /// All of the log files.
   lfs: SkipMap<u32, LogFile<C>>,
 
-  /// The active value log file.
-  /// 
-  /// Only one thread can update this, so [`AtomicRefCell`] is enough to handle this situation.
-  vlog: AtomicRefCell<ValueLog>,
+  /// The active value log files.
+  vlfs: SkipMap<u32, ValueLog>,
 
   /// Cache for value log files.
   #[cfg(feature = "std")]

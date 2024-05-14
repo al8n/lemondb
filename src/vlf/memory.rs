@@ -1,8 +1,6 @@
 use bytes::{BufMut, BytesMut};
 
-use crate::ValuePointer;
-
-use super::error::Error;
+use crate::{error::ValueLogError, ValuePointer};
 
 pub struct MemoryValueLog {
   fid: u32,
@@ -21,11 +19,11 @@ impl MemoryValueLog {
   }
 
   #[inline]
-  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, Error> {
+  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, ValueLogError> {
     let offset = self.buf.len();
 
     if offset + data.len() > self.cap {
-      return Err(Error::NotEnoughSpace {
+      return Err(ValueLogError::NotEnoughSpace {
         required: data.len() as u64,
         remaining: (self.cap - offset) as u64,
       });
@@ -40,11 +38,11 @@ impl MemoryValueLog {
   }
 
   #[inline]
-  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], Error> {
+  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     if offset + size <= self.buf.len() {
       Ok(&self.buf[offset..offset + size])
     } else {
-      Err(Error::OutOfBound {
+      Err(ValueLogError::OutOfBound {
         offset,
         len: size,
         size: self.buf.len() as u64,

@@ -16,8 +16,10 @@ harness = false
 
 [features]
 default = ["std"]
-alloc = []
+alloc = ["hashbrown"]
+sync = ["oneshot", "crossbeam-channel"]
 std = [
+  "ahash/default",
   "bytes/default",
   "crossbeam-skiplist/default",
   "either/default",
@@ -28,9 +30,11 @@ std = [
   "indexmap/default",
   "atomic_refcell/default",
   "quick_cache",
+  "smallvec-wrapper/default",
 ]
 
 [dependencies]
+ahash = { version = "0.8", default-features = false }
 atomic_refcell = { version = "0.1", default-features = false }
 bytes = { version = "1", default-features = false }
 crc32fast = "1"
@@ -39,13 +43,22 @@ derive_more = "0.99"
 enum_dispatch = "0.3"
 either = { version = "1", default-features = false }
 fs4 = { version = "0.8", optional = true }
+hashbrown = { version = "0.14", optional = true }
 indexmap = { version = "2", default-features = false }
 memmap2 = { version = "0.9", optional = true }
 quick_cache = { version = "0.5", optional = true }
 skl = { version = "0.8", default-features = false }
+smallvec-wrapper = { version = "0.1", default-features = false, features = ["const_new"] }
 thiserror = { version = "1", optional = true }
 tracing = "0.1"
 viewit = "0.1.5"
+
+# sync
+oneshot = { version = "0.1", optional = true }
+crossbeam-channel = { version = "0.5", optional = true }
+
+# future
+
 
 
 

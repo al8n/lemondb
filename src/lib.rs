@@ -13,10 +13,27 @@ extern crate alloc as std;
 #[cfg(not(any(feature = "std", feature = "alloc")))]
 compile_error!("This crate requires either the 'std' or 'alloc' feature to be enabled.");
 
+/// The default hash builder used by the database.
+#[cfg(feature = "std")]
+pub type DefaultHashBuilder = std::collections::hash_map::RandomState;
+
+/// The default hash builder used by the database.
+#[cfg(not(feature = "std"))]
+pub type DefaultHashBuilder = ahash::RandomState;
+
 /// Options for configuring the database.
 pub mod options;
 
+/// Errors that can occur when working with the database.
+pub mod error;
+
+#[cfg(feature = "std")]
+mod cache;
 mod wal;
+
+mod lf;
+mod manifest;
+mod vlf;
 
 mod db;
 pub use db::*;

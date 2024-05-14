@@ -1,15 +1,10 @@
 use super::{
+  error::ValueLogError,
   options::{CreateOptions, OpenOptions},
   *,
 };
 
 use core::cell::UnsafeCell;
-#[cfg(feature = "std")]
-use std::fs::File;
-
-/// Errors for value log file
-pub mod error;
-use error::Error;
 
 mod memory;
 use memory::*;
@@ -32,26 +27,29 @@ pub struct ValueLog {
 }
 
 impl ValueLog {
-  pub fn create(opts: CreateOptions) -> Result<Self, Error> {
+  pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
     match opts.in_memory {
       #[cfg(feature = "std")]
       false => Ok(Self {
         kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::create(opts)?)),
       }),
       _ => Ok(Self {
-        kind: UnsafeCell::new(ValueLogKind::Memory(MemoryValueLog::new(opts.fid, opts.size as usize))),
+        kind: UnsafeCell::new(ValueLogKind::Memory(MemoryValueLog::new(
+          opts.fid,
+          opts.size as usize,
+        ))),
       }),
     }
   }
 
   #[cfg(feature = "std")]
-  pub fn open(opts: OpenOptions) -> Result<Self, Error> {
+  pub fn open(opts: OpenOptions) -> Result<Self, ValueLogError> {
     Ok(Self {
       kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::open(opts)?)),
     })
   }
 
-  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, Error> {
+  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, ValueLogError> {
     match self.kind_mut() {
       ValueLogKind::Memory(vlf) => vlf.write(data),
       #[cfg(feature = "std")]
@@ -59,7 +57,7 @@ impl ValueLog {
     }
   }
 
-  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], Error> {
+  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     match self.kind() {
       ValueLogKind::Memory(vlf) => vlf.read(offset, size),
       #[cfg(feature = "std")]
@@ -68,7 +66,7 @@ impl ValueLog {
   }
 
   #[inline]
-  pub fn rewind(&mut self, size: usize) -> Result<(), Error> {
+  pub fn rewind(&mut self, size: usize) -> Result<(), ValueLogError> {
     match self.kind_mut() {
       ValueLogKind::Memory(vlf) => {
         vlf.rewind(size);
