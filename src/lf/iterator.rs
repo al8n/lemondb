@@ -4,6 +4,8 @@ use super::*;
 pub struct LogFileIterator<'a, C, Q: ?Sized = &'static [u8], R = core::ops::RangeFull> {
   pub(super) iter: skl::map::MapIterator<'a, Meta, C, Q, R>,
   pub(super) all_versions: bool,
+  // Indicates if it is possible to yield items.
+  pub(super) yield_: bool,
 }
 
 impl<'a, C: Comparator, Q, R> Iterator for LogFileIterator<'a, C, Q, R>
@@ -15,6 +17,10 @@ where
   type Item = EntryRef<'a, C>;
 
   fn next(&mut self) -> Option<Self::Item> {
+    if !self.yield_ {
+      return None;
+    }
+
     if self.all_versions {
       return self.iter.next().map(EntryRef::new);
     }
@@ -36,6 +42,10 @@ where
   R: RangeBounds<Q>,
 {
   fn next_back(&mut self) -> Option<EntryRef<'a, C>> {
+    if !self.yield_ {
+      return None;
+    }
+
     if self.all_versions {
       return self.iter.next_back().map(EntryRef::new);
     }
@@ -54,6 +64,10 @@ impl<'a, C, Q, R> LogFileIterator<'a, C, Q, R> {
   /// Returns the entry at the current position of the iterator.
   #[inline]
   pub fn entry(&self) -> Option<EntryRef<'a, C>> {
+    if !self.yield_ {
+      return None;
+    }
+
     self.iter.entry().map(|e| EntryRef::new(*e))
   }
 
@@ -73,6 +87,10 @@ where
   /// Moves the iterator to the highest element whose key is below the given bound.
   /// If no such element is found then `None` is returned.
   pub fn seek_upper_bound(&mut self, upper: Bound<&[u8]>) -> Option<EntryRef<'a, C>> {
+    if !self.yield_ {
+      return None;
+    }
+
     if self.all_versions {
       return self.iter.seek_upper_bound(upper).map(EntryRef::new);
     }
@@ -95,6 +113,10 @@ where
   /// Moves the iterator to the highest element whose key is below the given bound.
   /// If no such element is found then `None` is returned.
   pub fn seek_lower_bound(&mut self, lower: Bound<&[u8]>) -> Option<EntryRef<'a, C>> {
+    if !self.yield_ {
+      return None;
+    }
+
     if self.all_versions {
       return self.iter.seek_lower_bound(lower).map(EntryRef::new);
     }

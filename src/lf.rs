@@ -75,6 +75,8 @@ pub struct LogFile<C = Ascend> {
   ro: bool,
   minimum: Option<Bytes>,
   maximum: Option<Bytes>,
+  max_version: Option<u64>,
+  min_version: Option<u64>,
 }
 
 impl<C> LogFile<C> {
@@ -134,6 +136,8 @@ impl<C: Comparator> LogFile<C> {
           ro: false,
           minimum: None,
           maximum: None,
+          max_version: None,
+          min_version: None,
         })
         .map_err(Into::into);
     }
@@ -150,6 +154,8 @@ impl<C: Comparator> LogFile<C> {
           ro: false,
           minimum: None,
           maximum: None,
+          max_version: None,
+          min_version: None,
         })
         .map_err(Into::into)
     })
@@ -165,6 +171,8 @@ impl<C: Comparator> LogFile<C> {
         ro: false,
         minimum: None,
         maximum: None,
+        max_version: None,
+        min_version: None,
       })
       .map_err(Into::into)
   }
@@ -183,6 +191,7 @@ impl<C: Comparator> LogFile<C> {
       write!(buf, "{:05}.{}", opts.fid, EXTENSION).unwrap();
       SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), opts.lock, cmp).map(|map| {
         let max_version = map.max_version();
+        let min_version = map.min_version();
         let minimum = map
           .first(max_version)
           .map(|ent| Bytes::copy_from_slice(ent.key()));
@@ -196,9 +205,21 @@ impl<C: Comparator> LogFile<C> {
           ro: true,
           minimum,
           maximum,
+          max_version: Some(max_version),
+          min_version: Some(min_version),
         }
       })
     })
+  }
+
+  #[inline]
+  pub fn max_version(&self) -> u64 {
+    self.max_version.unwrap_or_else(|| self.map.max_version())
+  }
+
+  #[inline]
+  pub fn min_version(&self) -> u64 {
+    self.min_version.unwrap_or_else(|| self.map.min_version())
   }
 
   /// Inserts the given key and value to the log.
@@ -270,6 +291,24 @@ impl<C: Comparator> LogFile<C> {
   /// Gets the value associated with the given key.
   #[inline]
   pub fn get<'a, 'b: 'a>(&'a self, version: u64, key: &'b [u8]) -> Option<EntryRef<'a, C>> {
+    // fast path
+    if version < self.min_version() {
+      return None;
+    }
+
+    if let Some(maximum) = &self.maximum {
+      if self.map.comparator().compare(key, maximum) == core::cmp::Ordering::Greater {
+        return None;
+      }
+    }
+
+    if let Some(minimum) = &self.minimum {
+      if self.map.comparator().compare(key, minimum) == core::cmp::Ordering::Less {
+        return None;
+      }
+    }
+
+    // fallback to slow path
     self.map.get(version, key).and_then(|ent| {
       if ent.trailer().is_removed() {
         None
@@ -282,19 +321,6 @@ impl<C: Comparator> LogFile<C> {
   /// Returns `true` if the log contains the given key.
   #[inline]
   pub fn contains_key(&self, version: u64, key: &[u8]) -> bool {
-    // fast path
-    if let Some(maximum) = &self.maximum {
-      if self.map.comparator().compare(key, maximum) == core::cmp::Ordering::Greater {
-        return false;
-      }
-    }
-
-    if let Some(minimum) = &self.minimum {
-      if self.map.comparator().compare(key, minimum) == core::cmp::Ordering::Less {
-        return false;
-      }
-    }
-
     self.get(version, key).is_some()
   }
 
@@ -316,6 +342,7 @@ impl<C: Comparator> LogFile<C> {
     LogFileIterator {
       iter: self.map.iter(version),
       all_versions: false,
+      yield_: self.min_version() <= version,
     }
   }
 
@@ -325,6 +352,7 @@ impl<C: Comparator> LogFile<C> {
     LogFileIterator {
       iter: self.map.iter_all_versions(version),
       all_versions: true,
+      yield_: self.min_version() <= version,
     }
   }
 
@@ -339,6 +367,7 @@ impl<C: Comparator> LogFile<C> {
     LogFileIterator {
       iter: self.map.range(version, range),
       all_versions: false,
+      yield_: self.min_version() <= version,
     }
   }
 
@@ -357,6 +386,7 @@ impl<C: Comparator> LogFile<C> {
     LogFileIterator {
       iter: self.map.range_all_versions(version, range),
       all_versions: true,
+      yield_: self.min_version() <= version,
     }
   }
 }

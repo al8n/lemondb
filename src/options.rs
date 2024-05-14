@@ -187,3 +187,78 @@ impl ManifestOptions {
     }
   }
 }
+
+/// The options for configuring the write-ahead log.
+#[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LogManagerOptions {
+  /// The default size of the write-ahead log size. Default is 2GB.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "Returns the size of the write-ahead log.")
+    ),
+    setter(attrs(doc = "Sets the size of the write-ahead log."))
+  )]
+  log_size: u64,
+
+  /// The default size of the shared value log. Default is 2GB.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "Returns the size of the shared value log.")
+    ),
+    setter(attrs(doc = "Sets the size of the shared value log."))
+  )]
+  vlog_size: u64,
+
+  /// The value threshold for values to be stored in the value log. Default is 1MB.
+  ///
+  /// If the value size is less than this threshold, the value will be stored within the key log.
+  /// Otherwise, the value will be stored in the value log.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "Returns the value threshold for values to be stored in the value log.")
+    ),
+    setter(attrs(doc = "Sets the value threshold for values to be stored in the value log."))
+  )]
+  value_threshold: u64,
+
+  /// The value threshold for big values. Default is 1GB.
+  ///
+  /// If the value size is greater than this threshold, the value will be stored in a standalone value log.
+  /// Otherwise, the value will be stored in a shared value log.
+  #[viewit(
+    getter(const, attrs(doc = "Returns the value threshold for big values.")),
+    setter(attrs(doc = "Sets the value threshold for big values."))
+  )]
+  big_value_threshold: u64,
+
+   /// Whether to lock the log. Default is `true`.
+  ///
+  /// If `true`, the log will be locked exlusively when it is created.
+  #[viewit(
+    getter(const, attrs(doc = "Returns if we should lock the log.")),
+    setter(attrs(doc = "Sets whether to lock the log."))
+  )]
+  lock: bool,
+
+  /// Whether to sync on write. Default is `true`.
+  ///
+  /// If `true`, the log will sync the data to disk on write.
+  #[viewit(
+    getter(const, attrs(doc = "Returns if we should sync on write.")),
+    setter(attrs(doc = "Sets whether to sync on write."))
+  )]
+  sync_on_write: bool,
+
+  /// Whether to open in-memory log. Default is `false`.
+  ///
+  /// If `true`, the log will be opened in memory.
+  #[viewit(
+    getter(const, attrs(doc = "Returns if we should open in-memory log.")),
+    setter(attrs(doc = "Sets whether to open in-memory log."))
+  )]
+  in_memory: bool,
+}

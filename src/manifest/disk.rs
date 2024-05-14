@@ -170,13 +170,28 @@ impl DiskManifest {
       self.rewrite()?;
     }
 
-    append(&mut self.file, event).map(|_| {
-      if event.kind.is_creation() {
-        self.manifest.creations += 1;
-      } else {
-        self.manifest.deletions += 1;
-      }
-    })
+    append(&mut self.file, event)
+      .map(|_| {
+        if event.kind.is_creation() {
+          self.manifest.creations += 1;
+        } else {
+          self.manifest.deletions += 1;
+        }
+      })
+      .map(|_| match event.kind {
+        ManifestEventKind::AddVlog => {
+          self.manifest.vlogs.insert(event.fid);
+        }
+        ManifestEventKind::AddLog => {
+          self.manifest.logs.insert(event.fid);
+        }
+        ManifestEventKind::RemoveVlog => {
+          self.manifest.vlogs.remove(&event.fid);
+        }
+        ManifestEventKind::RemoveLog => {
+          self.manifest.logs.remove(&event.fid);
+        }
+      })
   }
 
   #[inline]
