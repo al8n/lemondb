@@ -194,20 +194,14 @@ impl ManifestOptions {
 pub struct LogManagerOptions {
   /// The default size of the write-ahead log size. Default is 2GB.
   #[viewit(
-    getter(
-      const,
-      attrs(doc = "Returns the size of the write-ahead log.")
-    ),
+    getter(const, attrs(doc = "Returns the size of the write-ahead log.")),
     setter(attrs(doc = "Sets the size of the write-ahead log."))
   )]
   log_size: u64,
 
   /// The default size of the shared value log. Default is 2GB.
   #[viewit(
-    getter(
-      const,
-      attrs(doc = "Returns the size of the shared value log.")
-    ),
+    getter(const, attrs(doc = "Returns the size of the shared value log.")),
     setter(attrs(doc = "Sets the size of the shared value log."))
   )]
   vlog_size: u64,
@@ -225,7 +219,7 @@ pub struct LogManagerOptions {
   )]
   value_threshold: u64,
 
-  /// The value threshold for big values. Default is 1GB.
+  /// The value threshold for big values. Default is `vlog_size * 0.5`.
   ///
   /// If the value size is greater than this threshold, the value will be stored in a standalone value log.
   /// Otherwise, the value will be stored in a shared value log.
@@ -235,7 +229,7 @@ pub struct LogManagerOptions {
   )]
   big_value_threshold: u64,
 
-   /// Whether to lock the log. Default is `true`.
+  /// Whether to lock the log. Default is `true`.
   ///
   /// If `true`, the log will be locked exlusively when it is created.
   #[viewit(
@@ -261,4 +255,39 @@ pub struct LogManagerOptions {
     setter(attrs(doc = "Sets whether to open in-memory log."))
   )]
   in_memory: bool,
+}
+
+impl Default for LogManagerOptions {
+  #[inline]
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl LogManagerOptions {
+  /// Creates a new log manager options with the default values.
+  #[inline]
+  pub const fn new() -> Self {
+    Self {
+      log_size: 2 * GB as u64,
+      vlog_size: 2 * GB as u64,
+      value_threshold: MB as u64,
+      big_value_threshold: GB as u64,
+      lock: true,
+      sync_on_write: true,
+      in_memory: false,
+    }
+  }
+
+  /// Creates a new log manager options with the given log size.
+  #[inline]
+  pub(crate) const fn create_options(&self, fid: u32) -> CreateOptions {
+    CreateOptions {
+      fid,
+      size: self.log_size,
+      lock: self.lock,
+      sync_on_write: self.sync_on_write,
+      in_memory: self.in_memory,
+    }
+  }
 }

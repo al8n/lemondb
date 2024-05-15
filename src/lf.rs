@@ -1,4 +1,4 @@
-use super::{options::*, *};
+use super::{error::LogFileError, options::*, *};
 
 use core::{
   cell::RefCell,
@@ -9,7 +9,9 @@ use std::io;
 use bytes::Bytes;
 use skl::SkipMap;
 
-pub use skl::{Ascend, Comparator, Descend, OccupiedValue};
+pub use skl::{
+  Ascend, Comparator, Descend, MmapOptions, OccupiedValue, OpenOptions as SklOpenOptions,
+};
 
 use either::Either;
 
@@ -19,52 +21,7 @@ pub use iterator::*;
 const EXTENSION: &str = "klog";
 
 std::thread_local! {
-  static BUF: RefCell<std::string::String> = RefCell::new(std::string::String::with_capacity(10));
-}
-
-/// Errors that can occur when working with a log.
-#[derive(Debug)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
-pub enum Error {
-  /// An I/O error occurred.
-  #[cfg(feature = "std")]
-  #[cfg_attr(feature = "std", error(transparent))]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  IO(#[from] io::Error),
-  /// A log error occurred.
-  #[cfg_attr(feature = "std", error(transparent))]
-  Log(#[cfg_attr(feature = "std", from)] skl::map::Error),
-  /// Returned when writing the batch failed.
-  #[cfg_attr(
-    feature = "std",
-    error("failed to write batch at index {idx}: {source}")
-  )]
-  WriteBatch {
-    /// The index of the key-value pair that caused the error.
-    idx: usize,
-    /// The error that caused the failure.
-    #[cfg_attr(feature = "std", source)]
-    source: skl::map::Error,
-  },
-}
-
-#[cfg(not(feature = "std"))]
-impl From<skl::map::Error> for Error {
-  fn from(e: skl::map::Error) -> Self {
-    Error::Log(e)
-  }
-}
-
-#[cfg(not(feature = "std"))]
-impl core::fmt::Display for Error {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    match self {
-      Self::Log(e) => write!(f, "{}", e),
-      Self::WriteBatch { idx, source } => {
-        write!(f, "failed to write batch at index {}: {}", idx, source)
-      }
-    }
-  }
+  static BUF: RefCell<std::string::String> = RefCell::new(std::string::String::with_capacity(11));
 }
 
 /// A append-only log based on on-disk [`SkipMap`] for key-value databases based on bitcask model.
@@ -124,7 +81,7 @@ impl<C> LogFile<C> {
 impl<C: Comparator> LogFile<C> {
   /// Create a new log with the given options.
   #[cfg(feature = "std")]
-  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, Error> {
+  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
     if opts.in_memory {
@@ -145,8 +102,14 @@ impl<C: Comparator> LogFile<C> {
     BUF.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:05}.{}", opts.fid, EXTENSION).unwrap();
-      SkipMap::<Meta, C>::mmap_mut_with_comparator(buf.as_str(), opts.size as usize, opts.lock, cmp)
+      write!(buf, "{:06}.{}", opts.fid, EXTENSION).unwrap();
+      let open_opts = SklOpenOptions::new()
+        .create_new(Some(opts.size))
+        .read(true)
+        .write(true)
+        .lock_exclusive(opts.lock)
+        .shrink_on_drop(true);
+      SkipMap::<Meta, C>::mmap_mut_with_comparator(buf.as_str(), open_opts, MmapOptions::new(), cmp)
         .map(|map| Self {
           map,
           fid: opts.fid,
@@ -162,7 +125,7 @@ impl<C: Comparator> LogFile<C> {
   }
 
   #[cfg(not(feature = "std"))]
-  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, Error> {
+  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, LogFileError> {
     SkipMap::<Meta, C>::with_comparator(opts.size, cmp)
       .map(|map| Self {
         map,
@@ -182,33 +145,39 @@ impl<C: Comparator> LogFile<C> {
   /// **Note**: `LogFile` constructed with this method is read only.
   #[cfg(feature = "std")]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  pub fn open(cmp: C, opts: OpenOptions) -> io::Result<Self> {
+  pub fn open(cmp: C, opts: OpenOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
     BUF.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:05}.{}", opts.fid, EXTENSION).unwrap();
-      SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), opts.lock, cmp).map(|map| {
-        let max_version = map.max_version();
-        let min_version = map.min_version();
-        let minimum = map
-          .first(max_version)
-          .map(|ent| Bytes::copy_from_slice(ent.key()));
-        let maximum = map
-          .last(max_version)
-          .map(|ent| Bytes::copy_from_slice(ent.key()));
-        Self {
-          map,
-          fid: opts.fid,
-          sync_on_write: false,
-          ro: true,
-          minimum,
-          maximum,
-          max_version: Some(max_version),
-          min_version: Some(min_version),
-        }
-      })
+      write!(buf, "{:06}.{}", opts.fid, EXTENSION).unwrap();
+      let open_opts = SklOpenOptions::new()
+        .read(true)
+        .lock_shared(opts.lock)
+        .shrink_on_drop(true);
+      SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), open_opts, MmapOptions::new(), cmp)
+        .map(|map| {
+          let max_version = map.max_version();
+          let min_version = map.min_version();
+          let minimum = map
+            .first(max_version)
+            .map(|ent| Bytes::copy_from_slice(ent.key()));
+          let maximum = map
+            .last(max_version)
+            .map(|ent| Bytes::copy_from_slice(ent.key()));
+          Self {
+            map,
+            fid: opts.fid,
+            sync_on_write: false,
+            ro: true,
+            minimum,
+            maximum,
+            max_version: Some(max_version),
+            min_version: Some(min_version),
+          }
+        })
+        .map_err(Into::into)
     })
   }
 
@@ -229,7 +198,7 @@ impl<C: Comparator> LogFile<C> {
     meta: Meta,
     key: &'b [u8],
     value: &'b [u8],
-  ) -> Result<Option<EntryRef<'a, C>>, Error> {
+  ) -> Result<Option<EntryRef<'a, C>>, LogFileError> {
     match self.map.insert(meta, key, value) {
       Ok(ent) => {
         if self.sync_on_write {
@@ -237,7 +206,7 @@ impl<C: Comparator> LogFile<C> {
         }
         Ok(ent.map(EntryRef::new))
       }
-      Err(e) => Err(Error::Log(e)),
+      Err(e) => Err(LogFileError::Log(e)),
     }
   }
 
@@ -255,7 +224,7 @@ impl<C: Comparator> LogFile<C> {
     key: &'b [u8],
     value_size: u32,
     f: impl FnOnce(OccupiedValue<'a>) -> Result<(), E>,
-  ) -> Result<Option<EntryRef<'a, C>>, Either<E, Error>> {
+  ) -> Result<Option<EntryRef<'a, C>>, Either<E, LogFileError>> {
     match self.map.insert_with(meta, key, value_size, f) {
       Ok(ent) => {
         if self.sync_on_write {
@@ -263,7 +232,7 @@ impl<C: Comparator> LogFile<C> {
         }
         Ok(ent.map(EntryRef::new))
       }
-      Err(e) => Err(e.map_right(Error::Log)),
+      Err(e) => Err(e.map_right(LogFileError::Log)),
     }
   }
 
@@ -273,12 +242,12 @@ impl<C: Comparator> LogFile<C> {
   /// This method does not guarantee atomicity, which means that if the method fails in the middle of writing the batch,
   /// some of the key-value pairs may be written to the log.
   #[inline]
-  pub fn insert_many(&self, batch: &[Entry]) -> Result<(), Error> {
+  pub fn insert_many(&self, batch: &[Entry]) -> Result<(), LogFileError> {
     for (idx, ent) in batch.iter().enumerate() {
       self
         .map
         .insert(ent.meta(), ent.key(), ent.value())
-        .map_err(|e| Error::WriteBatch { idx, source: e })?;
+        .map_err(|e| LogFileError::WriteBatch { idx, source: e })?;
     }
 
     if self.sync_on_write {

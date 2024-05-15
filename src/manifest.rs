@@ -62,12 +62,21 @@ impl ManifestEvent {
     + mem::size_of::<u32>() // fid
     + mem::size_of::<u32>() // checksum 
     + 1; // newline character
+
+  #[inline]
+  pub(crate) const fn add_log(fid: u32) -> Self {
+    Self {
+      kind: ManifestEventKind::AddLog,
+      fid,
+    }
+  }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Manifest {
   vlogs: HashSet<u32>,
   logs: HashSet<u32>,
+  last_fid: u32,
 
   // Contains total number of creation and deletion changes in the manifest -- used to compute
   // whether it'd be useful to rewrite the manifest.
@@ -142,6 +151,15 @@ impl ManifestFile {
       ManifestFileKind::Memory(_) => Ok(()),
       #[cfg(feature = "std")]
       ManifestFileKind::Disk(d) => d.sync_all(),
+    }
+  }
+
+  #[inline]
+  pub const fn last_fid(&self) -> u32 {
+    match &self.kind {
+      ManifestFileKind::Memory(m) => m.last_fid(),
+      #[cfg(feature = "std")]
+      ManifestFileKind::Disk(d) => d.last_fid(),
     }
   }
 }

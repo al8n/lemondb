@@ -101,6 +101,7 @@ impl DiskManifest {
     let mut deletions = 0;
     let mut vlogs = HashSet::new();
     let mut logs = HashSet::new();
+    let mut last_fid = 0;
     loop {
       let bytes_read = file.read_vectored(&mut buffers)?;
       if bytes_read == 0 {
@@ -120,6 +121,8 @@ impl DiskManifest {
           if cks != cks2 {
             return Err(ManifestError::ChecksumMismatch);
           }
+
+          last_fid = last_fid.max(fid);
 
           match kind {
             ManifestEventKind::AddVlog => {
@@ -146,6 +149,7 @@ impl DiskManifest {
     let manifest = Manifest {
       vlogs,
       logs,
+      last_fid,
       creations,
       deletions,
     };
@@ -170,28 +174,26 @@ impl DiskManifest {
       self.rewrite()?;
     }
 
-    append(&mut self.file, event)
-      .map(|_| {
-        if event.kind.is_creation() {
-          self.manifest.creations += 1;
-        } else {
-          self.manifest.deletions += 1;
-        }
-      })
-      .map(|_| match event.kind {
-        ManifestEventKind::AddVlog => {
-          self.manifest.vlogs.insert(event.fid);
-        }
-        ManifestEventKind::AddLog => {
-          self.manifest.logs.insert(event.fid);
-        }
-        ManifestEventKind::RemoveVlog => {
-          self.manifest.vlogs.remove(&event.fid);
-        }
-        ManifestEventKind::RemoveLog => {
-          self.manifest.logs.remove(&event.fid);
-        }
-      })
+    append(&mut self.file, event).map(|_| match event.kind {
+      ManifestEventKind::AddVlog => {
+        self.manifest.vlogs.insert(event.fid);
+        self.manifest.last_fid = self.manifest.last_fid.max(event.fid);
+        self.manifest.creations += 1;
+      }
+      ManifestEventKind::AddLog => {
+        self.manifest.logs.insert(event.fid);
+        self.manifest.last_fid = self.manifest.last_fid.max(event.fid);
+        self.manifest.creations += 1;
+      }
+      ManifestEventKind::RemoveVlog => {
+        self.manifest.vlogs.remove(&event.fid);
+        self.manifest.deletions += 1;
+      }
+      ManifestEventKind::RemoveLog => {
+        self.manifest.logs.remove(&event.fid);
+        self.manifest.deletions += 1;
+      }
+    })
   }
 
   #[inline]
@@ -203,6 +205,11 @@ impl DiskManifest {
   pub fn sync_all(&mut self) -> Result<(), ManifestError> {
     self.flush()?;
     self.file.get_mut().sync_all().map_err(Into::into)
+  }
+
+  #[inline]
+  pub const fn last_fid(&self) -> u32 {
+    self.manifest.last_fid
   }
 
   #[inline]
@@ -222,6 +229,7 @@ impl DiskManifest {
     // truncate the file
     self.file.get_mut().set_len(MANIFEST_HEADER_SIZE as u64)?;
 
+    let mut last_fid = 0;
     for fid in self.manifest.logs.iter() {
       append(
         &mut self.file,
@@ -230,6 +238,7 @@ impl DiskManifest {
           fid: *fid,
         },
       )?;
+      last_fid = last_fid.max(*fid);
     }
 
     for fid in self.manifest.vlogs.iter() {
@@ -240,9 +249,11 @@ impl DiskManifest {
           fid: *fid,
         },
       )?;
+      last_fid = last_fid.max(*fid);
     }
 
     self.manifest.creations = self.manifest.logs.len() + self.manifest.vlogs.len();
+    self.manifest.last_fid = last_fid;
     self.file.flush()?;
     self.file.get_mut().sync_all()?;
     Ok(())

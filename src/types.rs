@@ -8,15 +8,16 @@ use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError}
 /// The metadata is a 64-bit value with the following layout:
 ///
 /// ```text
-/// +----------------------+--------------------------------+---------------------------+
-/// | 62 bits for version  |  1 bit for value pointer mark  |  1 bit for deletion mark  |
-/// +----------------------+--------------------------------+---------------------------+
+/// +----------------------+--------------------------------+---------------------------+----------------------+
+/// | 62 bits for version  |  1 bit for value pointer mark  |  1 bit for deletion mark  | 32 bits for checksum |
+/// +----------------------+--------------------------------+---------------------------+----------------------+
 /// ```
 #[derive(Copy, Clone, Eq, PartialEq)]
-#[repr(transparent)]
+#[repr(C, align(8))]
 pub struct Meta {
   /// 62 bits for version, 1 bit for value pointer mark, and 1 bit for deletion flag.
   meta: u64,
+  cks: u32,
 }
 
 impl core::fmt::Debug for Meta {
@@ -43,24 +44,24 @@ impl Meta {
 
   /// Create a new metadata with the given version.
   #[inline]
-  pub const fn new(version: u64) -> Self {
+  pub const fn new(version: u64, cks: u32) -> Self {
     assert!(version < Self::VERSION_MASK, "version is too large");
 
-    Self { meta: version }
+    Self { meta: version, cks }
   }
 
   /// Create a new metadata with the given version and removed flag.
   #[inline]
-  pub const fn removed(mut version: u64) -> Self {
+  pub const fn removed(mut version: u64, cks: u32) -> Self {
     version |= Self::REMOVED_FLAG;
-    Self { meta: version }
+    Self { meta: version, cks }
   }
 
   /// Create a new metadata with the given version and value pointer flag.
   #[inline]
-  pub const fn pointer(mut version: u64) -> Self {
+  pub const fn pointer(mut version: u64, cks: u32) -> Self {
     version |= Self::VALUE_POINTER_FLAG;
-    Self { meta: version }
+    Self { meta: version, cks }
   }
 
   /// Returns `true` if the entry is removed.
@@ -206,6 +207,8 @@ impl ValuePointer {
 }
 
 impl ValuePointer {
+  pub(crate) const MAX_ENCODING_SIZE: usize = 1 + 5 + 10 + 10; // 1 byte for encoded size and 3 varints
+
   /// Returns the encoded size of the value pointer.
   #[inline]
   pub fn encoded_size(&self) -> usize {
@@ -278,19 +281,19 @@ mod tests {
 
   #[test]
   fn test_meta() {
-    let meta = Meta::new(0);
+    let meta = Meta::new(0, 0);
     assert_eq!(meta.version(), 0);
     assert!(!meta.is_removed());
 
-    let meta = Meta::removed(1);
+    let meta = Meta::removed(1, 0);
     assert_eq!(meta.version(), 1);
     assert!(meta.is_removed());
 
-    let meta = Meta::new(100);
+    let meta = Meta::new(100, 0);
     assert_eq!(meta.version(), 100);
     assert!(!meta.is_removed());
 
-    let meta = Meta::removed(101);
+    let meta = Meta::removed(101, 0);
     assert_eq!(meta.version(), 101);
     assert!(meta.is_removed());
 
@@ -299,7 +302,7 @@ mod tests {
       "Meta { version: 101, removed: true, pointer: false }"
     );
 
-    let meta = Meta::pointer(102);
+    let meta = Meta::pointer(102, 0);
     assert_eq!(meta.version(), 102);
     assert!(!meta.is_removed());
     assert!(meta.is_pointer());

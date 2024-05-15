@@ -8,7 +8,13 @@ use quick_cache::sync::Cache;
 use skl::Ascend;
 use vlf::ValueLog;
 
-use super::*;
+use self::manifest::ManifestEvent;
+
+use super::{
+  error::{Error, LogFileError},
+  options::LogManagerOptions,
+  *,
+};
 
 pub struct LogManager<C = Ascend> {
   /// All of the log files.
@@ -21,16 +27,65 @@ pub struct LogManager<C = Ascend> {
   #[cfg(feature = "std")]
   vcache: Option<Arc<Cache<u32, Arc<ValueLog>>>>,
 
+  manifest: ManifestFile,
+  opts: LogManagerOptions,
 
+  cmp: C,
 }
 
-impl<C: Comparator> LogManager<C> {
-  pub fn insert_bytes(&self, key: &[u8], val: &[u8]) {
-    // first check if the value is big enough to be written to a standalone value log file
+impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
+  pub fn insert_bytes(&mut self, version: u64, key: &[u8], val: &[u8]) -> Result<(), Error> {
+    let val_len = val.len();
 
-    // first try to write to the active value log file
-    let active_vlf = self.vlfs.front().expect("no active value log file");
+    let mut h = crc32fast::Hasher::new();
+    h.update(key);
+    h.update(val);
+    let cks = h.finalize();
+    let meta = Meta::new(version, cks);
 
+    // First, check if the value is big enough to be written to a standalone value log file
+    if val_len as u64 >= self.opts.big_value_threshold {
+      return self.insert_entry_to_standalone_vlog(key, val);
+    }
 
+    // Second, check if the value is big enough to be written to the shared value log file
+    if val_len as u64 >= self.opts.value_threshold {
+      return self.insert_entry_to_shared_vlog(key, val);
+    }
+
+    // Finally, write the entry to the key log
+    {
+      let active_lf = self.lfs.back().expect("no active log file");
+      match active_lf.value().insert(meta, key, val) {
+        Ok(_) => return Ok(()),
+        Err(LogFileError::Log(skl::map::Error::Full(_))) => {}
+        Err(e) => return Err(e.into()),
+      }
+    }
+
+    let last_fid = self.manifest.last_fid();
+    let new_fid = last_fid + 1;
+    let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))?;
+    self.manifest.append(ManifestEvent::add_log(new_fid))?;
+    new_lf.insert(meta, key, val)?;
+    self.lfs.insert(new_fid, new_lf);
+    Ok(())
+  }
+
+  fn insert_entry_to_shared_vlog(&mut self, key: &[u8], val: &[u8]) -> Result<(), Error> {
+    todo!()
+  }
+
+  fn insert_entry_to_standalone_vlog(&mut self, key: &[u8], val: &[u8]) -> Result<(), Error> {
+    let active_lf = self.lfs.back().expect("no active log file");
+    let active_vlf = self.vlfs.back().expect("no active value log file");
+    let last_fid = self.manifest.last_fid();
+    let new_fid = last_fid + 1;
+
+    let mut buf = [0; ValuePointer::MAX_ENCODING_SIZE];
+    let vp = ValuePointer::new(new_fid, val.len() as u64, 0);
+    let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
+    let vp_buf = &buf[..encoded_size];
+    todo!()
   }
 }
