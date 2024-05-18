@@ -7,7 +7,7 @@ use core::{
 use std::io;
 
 use bytes::Bytes;
-use skl::SkipMap;
+use skl::{SkipMap, Trailer};
 
 pub use skl::{
   Ascend, Comparator, Descend, MmapOptions, OccupiedValue, OpenOptions as SklOpenOptions,
@@ -15,8 +15,10 @@ pub use skl::{
 
 use either::Either;
 
-mod iterator;
-pub use iterator::*;
+mod iter;
+pub use iter::*;
+mod all_versions_iter;
+pub use all_versions_iter::*;
 
 const EXTENSION: &str = "klog";
 
@@ -223,7 +225,7 @@ impl<C: Comparator> LogFile<C> {
     meta: Meta,
     key: &'b [u8],
     value_size: u32,
-    f: impl FnOnce(OccupiedValue<'a>) -> Result<(), E>,
+    f: impl FnOnce(OccupiedValue<'a>) -> Result<(), E> + Copy,
   ) -> Result<Option<EntryRef<'a, C>>, Either<E, LogFileError>> {
     match self.map.insert_with(meta, key, value_size, f) {
       Ok(ent) => {
@@ -259,83 +261,113 @@ impl<C: Comparator> LogFile<C> {
 
   /// Gets the value associated with the given key.
   #[inline]
-  pub fn get<'a, 'b: 'a>(&'a self, version: u64, key: &'b [u8]) -> Option<EntryRef<'a, C>> {
+  pub fn get<'a, 'b: 'a>(
+    &'a self,
+    version: u64,
+    key: &'b [u8],
+  ) -> Result<Option<EntryRef<'a, C>>, LogFileError> {
     // fast path
     if version < self.min_version() {
-      return None;
+      return Ok(None);
     }
 
     if let Some(maximum) = &self.maximum {
       if self.map.comparator().compare(key, maximum) == core::cmp::Ordering::Greater {
-        return None;
+        return Ok(None);
       }
     }
 
     if let Some(minimum) = &self.minimum {
       if self.map.comparator().compare(key, minimum) == core::cmp::Ordering::Less {
-        return None;
+        return Ok(None);
       }
     }
 
     // fallback to slow path
-    self.map.get(version, key).and_then(|ent| {
-      if ent.trailer().is_removed() {
-        None
-      } else {
-        Some(EntryRef::new(ent))
+    match self.map.get(version, key) {
+      Some(ent) => {
+        validate_checksum(
+          ent.version(),
+          ent.key(),
+          Some(ent.value()),
+          ent.trailer().checksum(),
+        )?;
+        Ok(Some(EntryRef::new(ent)))
       }
-    })
+      None => Ok(None),
+    }
   }
 
   /// Returns `true` if the log contains the given key.
   #[inline]
-  pub fn contains_key(&self, version: u64, key: &[u8]) -> bool {
-    self.get(version, key).is_some()
+  pub fn contains_key(&self, version: u64, key: &[u8]) -> Result<bool, LogFileError> {
+    self.get(version, key).map(|v| v.is_some())
   }
 
   /// Returns the first (minimum) key in the log.
   #[inline]
-  pub fn first(&self, version: u64) -> Option<EntryRef<C>> {
-    self.map.first(version).map(EntryRef::new)
+  pub fn first(&self, version: u64) -> Result<Option<EntryRef<C>>, LogFileError> {
+    match self.map.first(version) {
+      Some(ent) => {
+        let trailer = ent.trailer();
+        validate_checksum(
+          trailer.version(),
+          ent.key(),
+          Some(ent.value()),
+          trailer.checksum(),
+        )?;
+        Ok(Some(EntryRef::new(ent)))
+      }
+      None => Ok(None),
+    }
   }
 
   /// Returns the last (maximum) key in the log.
   #[inline]
-  pub fn last(&self, version: u64) -> Option<EntryRef<C>> {
-    self.map.last(version).map(EntryRef::new)
+  pub fn last(&self, version: u64) -> Result<Option<EntryRef<C>>, LogFileError> {
+    match self.map.last(version) {
+      Some(ent) => {
+        let trailer = ent.trailer();
+        validate_checksum(
+          trailer.version(),
+          ent.key(),
+          Some(ent.value()),
+          trailer.checksum(),
+        )?;
+        Ok(Some(EntryRef::new(ent)))
+      }
+      None => Ok(None),
+    }
   }
 
   /// Returns an iterator over the entries less or equal to the given version in the log.
   #[inline]
-  pub fn iter(&self, version: u64) -> LogFileIterator<C> {
-    LogFileIterator {
+  pub fn iter(&self, version: u64) -> LogFileIter<C> {
+    LogFileIter {
       iter: self.map.iter(version),
-      all_versions: false,
       yield_: self.min_version() <= version,
     }
   }
 
   /// Returns an iterator over all versions of the entries less or equal to the given version in the log.
   #[inline]
-  pub fn iter_all_versions(&self, version: u64) -> LogFileIterator<C> {
-    LogFileIterator {
+  pub fn iter_all_versions(&self, version: u64) -> LogFileAllVersionsIter<C> {
+    LogFileAllVersionsIter {
       iter: self.map.iter_all_versions(version),
-      all_versions: true,
       yield_: self.min_version() <= version,
     }
   }
 
   /// Returns a iterator that within the range, this iterator will yield the latest version of all entries in the range less or equal to the given version.
   #[inline]
-  pub fn range<'a, Q, R>(&'a self, version: u64, range: R) -> LogFileIterator<'a, C, Q, R>
+  pub fn range<'a, Q, R>(&'a self, version: u64, range: R) -> LogFileIter<'a, C, Q, R>
   where
     &'a [u8]: PartialOrd<Q>,
     Q: ?Sized + PartialOrd<&'a [u8]>,
     R: RangeBounds<Q> + 'a,
   {
-    LogFileIterator {
+    LogFileIter {
       iter: self.map.range(version, range),
-      all_versions: false,
       yield_: self.min_version() <= version,
     }
   }
@@ -346,16 +378,36 @@ impl<C: Comparator> LogFile<C> {
     &'a self,
     version: u64,
     range: R,
-  ) -> LogFileIterator<'a, C, Q, R>
+  ) -> LogFileAllVersionsIter<'a, C, Q, R>
   where
     &'a [u8]: PartialOrd<Q>,
     Q: ?Sized + PartialOrd<&'a [u8]>,
     R: RangeBounds<Q> + 'a,
   {
-    LogFileIterator {
+    LogFileAllVersionsIter {
       iter: self.map.range_all_versions(version, range),
-      all_versions: true,
       yield_: self.min_version() <= version,
     }
+  }
+}
+
+#[inline]
+fn validate_checksum(
+  version: u64,
+  key: &[u8],
+  value: Option<&[u8]>,
+  cks: u32,
+) -> Result<(), LogFileError> {
+  let mut h = crc32fast::Hasher::new();
+  h.update(key);
+  if let Some(value) = value {
+    h.update(value);
+  }
+  h.update(&version.to_le_bytes());
+
+  if h.finalize() != cks {
+    Err(LogFileError::ChecksumMismatch)
+  } else {
+    Ok(())
   }
 }

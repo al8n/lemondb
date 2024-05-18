@@ -81,6 +81,10 @@ pub enum LogFileError {
     #[cfg_attr(feature = "std", source)]
     source: skl::map::Error,
   },
+
+  /// Returned when checksum mismatch.
+  #[cfg_attr(feature = "std", error("checksum mismatch"))]
+  ChecksumMismatch,
 }
 
 #[cfg(not(feature = "std"))]

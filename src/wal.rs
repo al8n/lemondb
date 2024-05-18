@@ -40,17 +40,18 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
     let mut h = crc32fast::Hasher::new();
     h.update(key);
     h.update(val);
+    h.update(&version.to_le_bytes());
     let cks = h.finalize();
     let meta = Meta::new(version, cks);
 
     // First, check if the value is big enough to be written to a standalone value log file
     if val_len as u64 >= self.opts.big_value_threshold {
-      return self.insert_entry_to_standalone_vlog(key, val);
+      return self.insert_entry_to_standalone_vlog(meta, key, val);
     }
 
     // Second, check if the value is big enough to be written to the shared value log file
     if val_len as u64 >= self.opts.value_threshold {
-      return self.insert_entry_to_shared_vlog(key, val);
+      return self.insert_entry_to_shared_vlog(meta, key, val);
     }
 
     // Finally, write the entry to the key log
@@ -72,11 +73,14 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
     Ok(())
   }
 
-  fn insert_entry_to_shared_vlog(&mut self, key: &[u8], val: &[u8]) -> Result<(), Error> {
-    todo!()
-  }
+  fn insert_entry_to_shared_vlog(
+    &mut self,
+    mut meta: Meta,
+    key: &[u8],
+    val: &[u8],
+  ) -> Result<(), Error> {
+    meta.set_value_pointer();
 
-  fn insert_entry_to_standalone_vlog(&mut self, key: &[u8], val: &[u8]) -> Result<(), Error> {
     let active_lf = self.lfs.back().expect("no active log file");
     let active_vlf = self.vlfs.back().expect("no active value log file");
     let last_fid = self.manifest.last_fid();
@@ -86,6 +90,17 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
     let vp = ValuePointer::new(new_fid, val.len() as u64, 0);
     let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
     let vp_buf = &buf[..encoded_size];
+
+    todo!()
+  }
+
+  fn insert_entry_to_standalone_vlog(
+    &mut self,
+    mut meta: Meta,
+    key: &[u8],
+    val: &[u8],
+  ) -> Result<(), Error> {
+    meta.set_big_value_pointer();
     todo!()
   }
 }

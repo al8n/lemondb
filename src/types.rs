@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use skl::{map::EntryRef as MapEntryRef, Trailer};
+use skl::{map::EntryRef as MapEntryRef, map::OptionEntryRef as MapOptionEntryRef, Trailer};
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
 
@@ -8,13 +8,13 @@ use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError}
 /// The metadata is a 64-bit value with the following layout:
 ///
 /// ```text
-/// +----------------------+--------------------------------+---------------------------+----------------------+
-/// | 62 bits for version  |  1 bit for value pointer mark  |  1 bit for deletion mark  | 32 bits for checksum |
-/// +----------------------+--------------------------------+---------------------------+----------------------+
+/// +---------------------+----------------------------------+------------------------------+----------------------+
+/// | 62 bits for version | 1 bit for big value pointer mark | 1 bit for value pointer mark | 32 bits for checksum |
+/// +---------------------+----------------------------------+------------------------------+----------------------+
 /// ```
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(C, align(8))]
-pub struct Meta {
+pub(crate) struct Meta {
   /// 62 bits for version, 1 bit for value pointer mark, and 1 bit for deletion flag.
   meta: u64,
   cks: u32,
@@ -24,13 +24,13 @@ impl core::fmt::Debug for Meta {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Meta")
       .field("version", &self.version())
-      .field("removed", &self.is_removed())
-      .field("pointer", &self.is_pointer())
+      .field("value_pointer", &self.is_value_pointer())
+      .field("big_value_pointer", &self.is_big_value_pointer())
       .finish()
   }
 }
 
-impl Trailer for Meta {
+unsafe impl Trailer for Meta {
   #[inline]
   fn version(&self) -> u64 {
     self.meta & Self::VERSION_MASK
@@ -39,41 +39,102 @@ impl Trailer for Meta {
 
 impl Meta {
   const VERSION_MASK: u64 = 0x3FFFFFFFFFFFFFFF; // 62 bits for version
-  const VALUE_POINTER_FLAG: u64 = 1 << 62; // 63rd bit for value pointer mark
-  const REMOVED_FLAG: u64 = 1 << 63; // 64th bit for removed mark
+  const BIG_VALUE_POINTER_FLAG: u64 = 1 << 62; // 63rd bit for big value pointer mark
+  const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
 
   /// Create a new metadata with the given version.
   #[inline]
   pub const fn new(version: u64, cks: u32) -> Self {
-    assert!(version < Self::VERSION_MASK, "version is too large");
+    assert!(version < (1 << 62), "version is too large");
 
-    Self { meta: version, cks }
-  }
-
-  /// Create a new metadata with the given version and removed flag.
-  #[inline]
-  pub const fn removed(mut version: u64, cks: u32) -> Self {
-    version |= Self::REMOVED_FLAG;
     Self { meta: version, cks }
   }
 
   /// Create a new metadata with the given version and value pointer flag.
   #[inline]
-  pub const fn pointer(mut version: u64, cks: u32) -> Self {
+  pub const fn value_pointer(mut version: u64, cks: u32) -> Self {
     version |= Self::VALUE_POINTER_FLAG;
     Self { meta: version, cks }
   }
 
-  /// Returns `true` if the entry is removed.
+  /// Create a new metadata with the given version and big value pointer flag.
   #[inline]
-  pub const fn is_removed(&self) -> bool {
-    self.meta & Self::REMOVED_FLAG != 0
+  pub const fn big_value_pointer(mut version: u64, cks: u32) -> Self {
+    version |= Self::BIG_VALUE_POINTER_FLAG;
+    Self { meta: version, cks }
   }
 
-  /// Returns `true` if the value of entry is a value pointer.
+  /// Set the value pointer flag.
   #[inline]
-  pub const fn is_pointer(&self) -> bool {
+  pub fn set_value_pointer(&mut self) {
+    self.meta |= Self::VALUE_POINTER_FLAG;
+  }
+
+  /// Set the big value pointer flag.
+  #[inline]
+  pub fn set_big_value_pointer(&mut self) {
+    self.meta |= Self::BIG_VALUE_POINTER_FLAG;
+  }
+
+  /// Returns the checksum of the entry.
+  #[inline]
+  pub const fn checksum(&self) -> u32 {
+    self.cks
+  }
+
+  /// Returns `true` if the entry uses a big value pointer.
+  #[inline]
+  pub const fn is_big_value_pointer(&self) -> bool {
+    self.meta & Self::BIG_VALUE_POINTER_FLAG != 0
+  }
+
+  /// Returns `true` if the value of the entry is a value pointer.
+  #[inline]
+  pub const fn is_value_pointer(&self) -> bool {
     self.meta & Self::VALUE_POINTER_FLAG != 0
+  }
+}
+
+/// A reference to an entry in the log.
+#[derive(Debug, Copy, Clone)]
+pub struct OptionEntryRef<'a, C> {
+  ent: MapOptionEntryRef<'a, Meta, C>,
+}
+
+impl<'a, C> OptionEntryRef<'a, C> {
+  /// Returns the key of the entry.
+  #[inline]
+  pub const fn key(&self) -> &[u8] {
+    self.ent.key()
+  }
+
+  /// Returns the value of the entry. `None` means the entry is removed.
+  #[inline]
+  pub const fn value(&self) -> Option<&[u8]> {
+    self.ent.value()
+  }
+
+  /// Returns `true` if the value of the entry is a value pointer.
+  #[inline]
+  pub const fn is_value_pointer(&self) -> bool {
+    self.ent.trailer().is_value_pointer()
+  }
+
+  /// Returns `true` if the value of the entry is a value pointer.
+  #[inline]
+  pub const fn is_big_value_pointer(&self) -> bool {
+    self.ent.trailer().is_big_value_pointer()
+  }
+
+  /// Returns `true` if the value of the entry is removed.
+  #[inline]
+  pub const fn is_removed(&self) -> bool {
+    self.ent.is_removed()
+  }
+
+  #[inline]
+  pub(crate) const fn new(ent: MapOptionEntryRef<'a, Meta, C>) -> Self {
+    Self { ent }
   }
 }
 
@@ -98,8 +159,14 @@ impl<'a, C> EntryRef<'a, C> {
 
   /// Returns `true` if the value of the entry is a value pointer.
   #[inline]
-  pub const fn is_pointer(&self) -> bool {
-    self.ent.trailer().is_pointer()
+  pub const fn is_value_pointer(&self) -> bool {
+    self.ent.trailer().is_value_pointer()
+  }
+
+  /// Returns `true` if the value of the entry is a value pointer.
+  #[inline]
+  pub const fn is_big_value_pointer(&self) -> bool {
+    self.ent.trailer().is_big_value_pointer()
   }
 
   #[inline]
@@ -283,33 +350,31 @@ mod tests {
   fn test_meta() {
     let meta = Meta::new(0, 0);
     assert_eq!(meta.version(), 0);
-    assert!(!meta.is_removed());
-
-    let meta = Meta::removed(1, 0);
-    assert_eq!(meta.version(), 1);
-    assert!(meta.is_removed());
+    assert!(!meta.is_value_pointer());
+    assert!(!meta.is_big_value_pointer());
 
     let meta = Meta::new(100, 0);
     assert_eq!(meta.version(), 100);
-    assert!(!meta.is_removed());
-
-    let meta = Meta::removed(101, 0);
-    assert_eq!(meta.version(), 101);
-    assert!(meta.is_removed());
+    assert!(!meta.is_value_pointer());
+    assert!(!meta.is_big_value_pointer());
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 101, removed: true, pointer: false }"
+      "Meta { version: 101, removed: true, value_pointer: false, big_value_pointer: false }"
     );
 
-    let meta = Meta::pointer(102, 0);
+    let meta = Meta::value_pointer(102, 0);
     assert_eq!(meta.version(), 102);
-    assert!(!meta.is_removed());
-    assert!(meta.is_pointer());
+    assert!(meta.is_value_pointer());
+
+    let meta = Meta::big_value_pointer(102, 0);
+    assert_eq!(meta.version(), 102);
+    assert!(!meta.is_value_pointer());
+    assert!(meta.is_big_value_pointer());
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 102, removed: false, pointer: true }"
+      "Meta { version: 102, removed: false, value_pointer: false, big_value_pointer: true }"
     );
   }
 }
