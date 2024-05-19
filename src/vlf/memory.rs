@@ -2,6 +2,8 @@ use bytes::{BufMut, BytesMut};
 
 use crate::{error::ValueLogError, ValuePointer};
 
+use super::Header;
+
 pub struct MemoryValueLog {
   fid: u32,
   buf: BytesMut,
@@ -19,20 +21,35 @@ impl MemoryValueLog {
   }
 
   #[inline]
-  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, ValueLogError> {
-    let offset = self.buf.len();
+  pub fn write(
+    &mut self,
+    version: u64,
+    key: &[u8],
+    val: &[u8],
+    cks: u32,
+  ) -> Result<ValuePointer, ValueLogError> {
+    let kl = key.len();
+    let vl = val.len();
+    let h = Header::new(version, kl, vl, cks);
+    let encoded_len = h.encoded_len() + kl + vl;
 
-    if offset + data.len() > self.cap {
+    let offset = self.buf.len() as usize;
+    if offset + encoded_len > self.cap {
       return Err(ValueLogError::NotEnoughSpace {
-        required: data.len() as u64,
+        required: encoded_len as u64,
         remaining: (self.cap - offset) as u64,
       });
     }
 
-    self.buf.put_slice(data);
+    let header = h.encode()?;
+
+    self.buf.put_slice(&header);
+    self.buf.put_slice(key);
+    self.buf.put_slice(val);
+
     Ok(ValuePointer::new(
       self.fid,
-      data.len() as u64,
+      encoded_len as u64,
       offset as u64,
     ))
   }

@@ -1,5 +1,3 @@
-use skl::Trailer;
-
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -30,6 +28,7 @@ where
         ent.trailer().checksum(),
       )
       .map(|_| EntryRef::new(ent))
+      .map_err(Into::into)
     })
   }
 }
@@ -54,6 +53,7 @@ where
         trailer.checksum(),
       )
       .map(|_| EntryRef::new(ent))
+      .map_err(Into::into)
     })
   }
 }
@@ -102,7 +102,8 @@ where
           Some(ent.value()),
           trailer.checksum(),
         )
-        .map(|_| Some(EntryRef::new(ent)));
+        .map(|_| Some(EntryRef::new(ent)))
+        .map_err(Into::into);
       }
       None => Ok(None),
     }
@@ -127,7 +128,8 @@ where
           Some(ent.value()),
           trailer.checksum(),
         )
-        .map(|_| Some(EntryRef::new(ent)));
+        .map(|_| Some(EntryRef::new(ent)))
+        .map_err(Into::into);
       }
       None => Ok(None),
     }

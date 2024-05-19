@@ -1,6 +1,7 @@
 use super::{
-  error::ValueLogError,
+  error::{DecodeHeaderError, ValueLogError},
   options::{CreateOptions, OpenOptions},
+  util::{decode_varint, encode_varint, encoded_len_varint},
   *,
 };
 
@@ -21,7 +22,112 @@ enum ValueLogKind {
   Mmap(MmapValueLog),
 }
 
-// ValueLog is not thread safe and cannot be used concurrently.
+struct EncodedHeader {
+  buf: [u8; Header::MAX_ENCODED_SIZE],
+  len: usize,
+}
+
+impl core::ops::Deref for EncodedHeader {
+  type Target = [u8];
+
+  fn deref(&self) -> &Self::Target {
+    &self.buf[..self.len]
+  }
+}
+
+struct Header {
+  kl: u16,
+  vl: u32,
+  cks: u32,
+  version: u64,
+}
+
+impl Header {
+  const MAX_ENCODED_SIZE: usize = 3 + 10 + 10;
+  const MIN_ENCODED_SIZE: usize = 1 + 1 + 1;
+
+  #[inline]
+  const fn new(version: u64, kl: usize, vl: usize, cks: u32) -> Self {
+    Self {
+      kl: kl as u16,
+      vl: vl as u32,
+      cks,
+      version,
+    }
+  }
+
+  fn encode(&self) -> Result<EncodedHeader, ValueLogError> {
+    let mut buf = [0; Self::MAX_ENCODED_SIZE];
+
+    let mut cur = 0;
+    // encode key length
+    cur += encode_varint(self.kl as u64, &mut buf)?;
+    let vlcks = self.encode_vlcks();
+
+    // encode value length and checksum
+    cur += encode_varint(vlcks, &mut buf[cur..])?;
+
+    // encode version
+    cur += encode_varint(self.version, &mut buf[cur..])?;
+
+    Ok(EncodedHeader { buf, len: cur })
+  }
+
+  fn decode(buf: &[u8]) -> Result<(usize, Self), ValueLogError> {
+    if buf.len() < Self::MIN_ENCODED_SIZE {
+      return Err(DecodeHeaderError::NotEnoughBytes.into());
+    }
+
+    let mut readed = 0;
+    let (kl_size, kl) = decode_varint(buf)?;
+    readed += kl_size;
+    let kl = kl as u16;
+
+    let (vlcks_size, vlcks) = decode_varint(&buf[readed..]).map_err(DecodeHeaderError::Deocode)?;
+    readed += vlcks_size;
+
+    let (version_size, version) =
+      decode_varint(&buf[readed..]).map_err(DecodeHeaderError::Deocode)?;
+    readed += version_size;
+
+    let (vl, cks) = Self::decode_vlcks(vlcks);
+
+    Ok((
+      readed,
+      Self {
+        kl,
+        vl,
+        cks,
+        version,
+      },
+    ))
+  }
+
+  #[inline]
+  const fn encoded_len(&self) -> usize {
+    encoded_len_varint(self.kl as u64) + encoded_len_varint(self.encode_vlcks())
+  }
+
+  #[inline]
+  const fn encode_vlcks(&self) -> u64 {
+    // high 32 bits of value length, low 32 bits of checksum
+    ((self.vl as u64) << 32) | self.cks as u64
+  }
+
+  #[inline]
+  const fn decode_vlcks(src: u64) -> (u32, u32) {
+    // high 32 bits of value length, low 32 bits of checksum
+    ((src >> 32) as u32, src as u32)
+  }
+}
+
+/// ValueLog is not thread safe and cannot be used concurrently.
+///
+/// ```test
+/// +--------+-----+-----+
+/// | header | key | val |
+/// +--------+-----+-----+
+/// ```
 pub struct ValueLog {
   kind: UnsafeCell<ValueLogKind>,
 }
@@ -49,11 +155,17 @@ impl ValueLog {
     })
   }
 
-  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, ValueLogError> {
+  pub fn write(
+    &mut self,
+    version: u64,
+    key: &[u8],
+    value: &[u8],
+    cks: u32,
+  ) -> Result<ValuePointer, ValueLogError> {
     match self.kind_mut() {
-      ValueLogKind::Memory(vlf) => vlf.write(data),
+      ValueLogKind::Memory(vlf) => vlf.write(version, key, value, cks),
       #[cfg(feature = "std")]
-      ValueLogKind::Mmap(vlf) => vlf.write(data),
+      ValueLogKind::Mmap(vlf) => vlf.write(version, key, value, cks),
     }
   }
 

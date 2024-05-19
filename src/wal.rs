@@ -8,7 +8,7 @@ use quick_cache::sync::Cache;
 use skl::Ascend;
 use vlf::ValueLog;
 
-use self::manifest::ManifestEvent;
+use self::{manifest::ManifestEvent, util::checksum};
 
 use super::{
   error::{Error, LogFileError},
@@ -37,22 +37,27 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
   pub fn insert_bytes(&mut self, version: u64, key: &[u8], val: &[u8]) -> Result<(), Error> {
     let val_len = val.len();
 
-    let mut h = crc32fast::Hasher::new();
-    h.update(key);
-    h.update(val);
-    h.update(&version.to_le_bytes());
-    let cks = h.finalize();
-    let meta = Meta::new(version, cks);
-
     // First, check if the value is big enough to be written to a standalone value log file
     if val_len as u64 >= self.opts.big_value_threshold {
+      let mut meta = Meta::big_value_pointer(version);
+      let cks = checksum(meta.raw(), key, Some(val));
+      meta.set_checksum(cks);
+
       return self.insert_entry_to_standalone_vlog(meta, key, val);
     }
 
     // Second, check if the value is big enough to be written to the shared value log file
     if val_len as u64 >= self.opts.value_threshold {
+      let mut meta = Meta::value_pointer(version);
+      let cks = checksum(meta.raw(), key, Some(val));
+      meta.set_checksum(cks);
+
       return self.insert_entry_to_shared_vlog(meta, key, val);
     }
+
+    let mut meta = Meta::new(version);
+    let cks = checksum(meta.raw(), key, Some(val));
+    meta.set_checksum(cks);
 
     // Finally, write the entry to the key log
     {

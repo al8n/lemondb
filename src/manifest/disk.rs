@@ -4,6 +4,8 @@ use std::{
   path::{Path, PathBuf},
 };
 
+use crate::error::ChecksumMismatch;
+
 use super::*;
 
 const MANIFEST_FILENAME: &str = "MANIFEST";
@@ -119,7 +121,7 @@ impl DiskManifest {
           let cks = u32::from_le_bytes(encoded[5..9].try_into().unwrap());
           let cks2 = crc32fast::hash(&encoded[..5]);
           if cks != cks2 {
-            return Err(ManifestError::ChecksumMismatch);
+            return Err(ManifestError::ChecksumMismatch(ChecksumMismatch));
           }
 
           last_fid = last_fid.max(fid);

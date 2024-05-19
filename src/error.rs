@@ -1,3 +1,16 @@
+/// Checksum mismatch.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(thiserror::Error))]
+#[cfg_attr(feature = "std", error("checksum mismatch"))]
+pub struct ChecksumMismatch;
+
+#[cfg(not(feature = "std"))]
+impl core::fmt::Display for ChecksumMismatch {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    write!(f, "checksum mismatch")
+  }
+}
+
 /// Errors for manifest file.
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
@@ -33,7 +46,8 @@ pub enum ManifestError {
   #[error("corrupted manifest file: entry checksum mismatch")]
   #[cfg(feature = "std")]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  ChecksumMismatch,
+  ChecksumMismatch(#[cfg_attr(feature = "std", from)] ChecksumMismatch),
+
   /// Corrupted manifest file: not enough bytes to decode manifest entry.
   #[error("corrupted manifest file: not enough bytes to decode manifest entry")]
   #[cfg(feature = "std")]
@@ -84,7 +98,7 @@ pub enum LogFileError {
 
   /// Returned when checksum mismatch.
   #[cfg_attr(feature = "std", error("checksum mismatch"))]
-  ChecksumMismatch,
+  ChecksumMismatch(#[cfg_attr(feature = "std", from)] ChecksumMismatch),
 }
 
 #[cfg(not(feature = "std"))]
@@ -98,10 +112,34 @@ impl From<skl::map::Error> for LogFileError {
 impl core::fmt::Display for LogFileError {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Log(e) => write!(f, "{}", e),
+      Self::ChecksumMismatch(e) => write!(f, "{e}"),
+      Self::Log(e) => write!(f, "{e}"),
       Self::WriteBatch { idx, source } => {
         write!(f, "failed to write batch at index {}: {}", idx, source)
       }
+    }
+  }
+}
+
+/// Errors that can occur when encode/decode header.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(thiserror::Error))]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+pub enum DecodeHeaderError {
+  /// Returned when fail to decode header.
+  #[cfg_attr(feature = "std", error("fail to decode header: {0}"))]
+  Deocode(#[cfg_attr(feature = "std", from)] crate::util::VarintError),
+  /// Returned when not enough bytes to decode header.
+  #[cfg_attr(feature = "std", error("not enough bytes to decode header"))]
+  NotEnoughBytes,
+}
+
+#[cfg(not(feature = "std"))]
+impl core::fmt::Display for DecodeHeaderError {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::Deocode(e) => write!(f, "fail to decode header: {e}"),
+      Self::NotEnoughBytes => write!(f, "not enough bytes to decode header"),
     }
   }
 }
@@ -111,25 +149,42 @@ impl core::fmt::Display for LogFileError {
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum ValueLogError {
   /// An I/O error occurred.
-  #[cfg_attr(feature = "std", error(transparent))]
+  #[cfg(feature = "std")]
+  #[error(transparent)]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   IO(#[cfg_attr(feature = "std", from)] std::io::Error),
+
   /// Returned when the value log is in closed status.
-  #[cfg_attr(feature = "std", error("value log is closed"))]
+  #[cfg(feature = "std")]
+  #[error("value log is closed")]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   Closed,
+
   /// Returned when trying to write to a read-only value log.
-  #[cfg_attr(feature = "std", error("value log is read only"))]
+  #[cfg(feature = "std")]
+  #[error("value log is read only")]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   ReadOnly,
+
   /// Returned when the value log checksum mismatch.
   #[cfg_attr(feature = "std", error("value log checksum mismatch"))]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  ChecksumMismatch,
+  ChecksumMismatch(#[cfg_attr(feature = "std", from)] ChecksumMismatch),
+
   /// Returned when the value log is corrupted.
   #[cfg_attr(feature = "std", error("value log is corrupted"))]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   Corrupted,
+
+  /// Returned when fail to decode entry header from the value log.
+  #[cfg_attr(feature = "std", error(transparent))]
+  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+  DecodeHeader(#[cfg_attr(feature = "std", from)] DecodeHeaderError),
+
+  /// Returned when fail to encode entry header.
+  #[cfg_attr(feature = "std", error("fail to encode header: {0}"))]
+  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+  EncodeHeader(#[cfg_attr(feature = "std", from)] crate::util::VarintError),
 
   /// Returned when the value log does not have enough space to hold the value.
   #[cfg_attr(feature = "std", error("value log does not have enough space to hold the value, required: {required}, remaining: {remaining}"))]
@@ -159,7 +214,10 @@ pub enum ValueLogError {
 impl core::fmt::Display for ValueLogError {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      ValueLogError::NotEnoughSpace {
+      Self::ChecksumMismatch(e) => write!(f, "{e}"),
+      Self::DecodeHeader(e) => write!(f, "{e}"),
+      Self::EncodeHeader(e) => write!(f, "fail to encode header: {e}"),
+      Self::NotEnoughSpace {
         required,
         remaining,
       } => write!(
@@ -167,7 +225,7 @@ impl core::fmt::Display for ValueLogError {
         "value log does not have enough space to hold the value, required: {}, remaining: {}",
         required, remaining
       ),
-      ValueLogError::OutOfBound { offset, len, size } => write!(
+      Self::OutOfBound { offset, len, size } => write!(
         f,
         "value offset is out of value log bound, offset: {}, len: {}, size: {}",
         offset, len, size

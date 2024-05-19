@@ -13,7 +13,7 @@ where
   Q: ?Sized + PartialOrd<&'a [u8]>,
   R: RangeBounds<Q>,
 {
-  type Item = Result<OptionEntryRef<'a, C>, LogFileError>;
+  type Item = Result<VersionedEntryRef<'a, C>, LogFileError>;
 
   fn next(&mut self) -> Option<Self::Item> {
     if !self.yield_ {
@@ -28,7 +28,8 @@ where
         ent.value(),
         trailer.checksum(),
       )
-      .map(|_| OptionEntryRef::new(ent))
+      .map(|_| VersionedEntryRef::new(ent))
+      .map_err(Into::into)
     })
   }
 }
@@ -52,7 +53,8 @@ where
         ent.value(),
         trailer.checksum(),
       )
-      .map(|_| OptionEntryRef::new(ent))
+      .map(|_| VersionedEntryRef::new(ent))
+      .map_err(Into::into)
     })
   }
 }
@@ -60,12 +62,12 @@ where
 impl<'a, C, Q, R> LogFileAllVersionsIter<'a, C, Q, R> {
   /// Returns the entry at the current position of the iterator.
   #[inline]
-  pub fn entry(&self) -> Option<OptionEntryRef<'a, C>> {
+  pub fn entry(&self) -> Option<VersionedEntryRef<'a, C>> {
     if !self.yield_ {
       return None;
     }
 
-    self.iter.entry().cloned().map(OptionEntryRef::new)
+    self.iter.entry().cloned().map(VersionedEntryRef::new)
   }
 
   /// Returns the bounds of the iterator.
@@ -86,7 +88,7 @@ where
   pub fn seek_upper_bound(
     &mut self,
     upper: Bound<&[u8]>,
-  ) -> Result<Option<OptionEntryRef<'a, C>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a, C>>, LogFileError> {
     if !self.yield_ {
       return Ok(None);
     }
@@ -100,7 +102,8 @@ where
           ent.value(),
           trailer.checksum(),
         )
-        .map(|_| Some(OptionEntryRef::new(ent)));
+        .map(|_| Some(VersionedEntryRef::new(ent)))
+        .map_err(Into::into);
       }
       None => Ok(None),
     }
@@ -111,7 +114,7 @@ where
   pub fn seek_lower_bound(
     &mut self,
     lower: Bound<&[u8]>,
-  ) -> Result<Option<OptionEntryRef<'a, C>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a, C>>, LogFileError> {
     if !self.yield_ {
       return Ok(None);
     }
@@ -125,7 +128,8 @@ where
           ent.value(),
           trailer.checksum(),
         )
-        .map(|_| Some(OptionEntryRef::new(ent)));
+        .map(|_| Some(VersionedEntryRef::new(ent)))
+        .map_err(Into::into);
       }
       None => Ok(None),
     }

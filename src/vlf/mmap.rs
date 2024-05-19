@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, mem};
 use std::{fmt::Write, fs::File, io::Write as _};
 
 use fs4::FileExt;
@@ -138,28 +138,46 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub fn write(&mut self, data: &[u8]) -> Result<ValuePointer, ValueLogError> {
+  pub fn write(
+    &mut self,
+    version: u64,
+    key: &[u8],
+    val: &[u8],
+    cks: u32,
+  ) -> Result<ValuePointer, ValueLogError> {
     if self.ro {
       return Err(ValueLogError::ReadOnly);
     }
 
+    let kl = key.len();
+    let vl = val.len();
+    let h = Header::new(version, kl, vl, cks);
+    let encoded_len = h.encoded_len() + kl + vl;
+
     match self.buf {
       Memmap::MapMut { ref mut mmap, .. } => {
-        let len = data.len();
         let offset = self.len as usize;
-        if offset as u64 + len as u64 + CHECKSUM_OVERHEAD > self.cap {
+        if offset as u64 + encoded_len as u64 > self.cap {
           return Err(ValueLogError::NotEnoughSpace {
-            required: len as u64,
+            required: encoded_len as u64,
             remaining: self.cap - offset as u64,
           });
         }
 
-        mmap[offset..offset + len].copy_from_slice(data);
-        let cks = crc32fast::hash(&mmap[offset..offset + len]);
-        mmap[offset + len..offset + len + CHECKSUM_OVERHEAD as usize]
-          .copy_from_slice(&cks.to_le_bytes());
-        self.len += len as u64 + CHECKSUM_OVERHEAD;
-        Ok(ValuePointer::new(self.fid, len as u64, offset as u64))
+        let mut cur = offset;
+        let header = h.encode()?;
+
+        mmap[cur..cur + header.len].copy_from_slice(&header);
+        cur += header.len;
+        mmap[cur..cur + kl].copy_from_slice(key);
+        cur += kl;
+        mmap[cur..cur + vl].copy_from_slice(val);
+
+        Ok(ValuePointer::new(
+          self.fid,
+          encoded_len as u64,
+          offset as u64,
+        ))
       }
       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
       _ => Err(ValueLogError::Closed),

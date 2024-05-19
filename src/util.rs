@@ -2,6 +2,8 @@
 //!
 //! [prost]: https://github.com/tokio-rs/prost/blob/master/prost/src/encoding.rs.
 
+use crate::error::ChecksumMismatch;
+
 /// Error type for encoding and decoding varints.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum VarintError {
@@ -143,8 +145,40 @@ pub fn decode_varint(bytes: &[u8]) -> Result<(usize, u64), VarintError> {
 /// Returns the encoded length of the value in LEB128 variable length format.
 /// The returned value will be between 1 and 10, inclusive.
 #[inline]
-pub fn encoded_len_varint(value: u64) -> usize {
+pub const fn encoded_len_varint(value: u64) -> usize {
   // Based on [VarintSize64][1].
   // [1]: https://github.com/google/protobuf/blob/3.3.x/src/google/protobuf/io/coded_stream.h#L1301-L1309
   ((((value | 1).leading_zeros() ^ 63) * 9 + 73) / 64) as usize
+}
+
+#[inline]
+pub(crate) fn checksum(meta: u64, key: &[u8], value: Option<&[u8]>) -> u32 {
+  let mut h = crc32fast::Hasher::new();
+  h.update(key);
+  if let Some(value) = value {
+    h.update(value);
+  }
+  h.update(&meta.to_le_bytes());
+  h.finalize()
+}
+
+#[inline]
+pub(crate) fn validate_checksum(
+  version: u64,
+  key: &[u8],
+  value: Option<&[u8]>,
+  cks: u32,
+) -> Result<(), ChecksumMismatch> {
+  let mut h = crc32fast::Hasher::new();
+  h.update(key);
+  if let Some(value) = value {
+    h.update(value);
+  }
+  h.update(&version.to_le_bytes());
+
+  if h.finalize() != cks {
+    Err(ChecksumMismatch)
+  } else {
+    Ok(())
+  }
 }

@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use skl::{map::EntryRef as MapEntryRef, map::OptionEntryRef as MapOptionEntryRef, Trailer};
+use skl::{map::EntryRef as MapEntryRef, map::VersionedEntryRef as MapVersionedEntryRef, Trailer};
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
 
@@ -26,6 +26,7 @@ impl core::fmt::Debug for Meta {
       .field("version", &self.version())
       .field("value_pointer", &self.is_value_pointer())
       .field("big_value_pointer", &self.is_big_value_pointer())
+      .field("checksum", &self.cks)
       .finish()
   }
 }
@@ -44,24 +45,43 @@ impl Meta {
 
   /// Create a new metadata with the given version.
   #[inline]
-  pub const fn new(version: u64, cks: u32) -> Self {
+  pub const fn new(version: u64) -> Self {
     assert!(version < (1 << 62), "version is too large");
 
-    Self { meta: version, cks }
+    Self {
+      meta: version,
+      cks: 0,
+    }
   }
 
   /// Create a new metadata with the given version and value pointer flag.
   #[inline]
-  pub const fn value_pointer(mut version: u64, cks: u32) -> Self {
+  pub const fn value_pointer(mut version: u64) -> Self {
+    assert!(version < (1 << 62), "version is too large");
+
     version |= Self::VALUE_POINTER_FLAG;
-    Self { meta: version, cks }
+    Self {
+      meta: version,
+      cks: 0,
+    }
   }
 
   /// Create a new metadata with the given version and big value pointer flag.
   #[inline]
-  pub const fn big_value_pointer(mut version: u64, cks: u32) -> Self {
+  pub const fn big_value_pointer(mut version: u64) -> Self {
+    assert!(version < (1 << 62), "version is too large");
+
     version |= Self::BIG_VALUE_POINTER_FLAG;
-    Self { meta: version, cks }
+    Self {
+      meta: version,
+      cks: 0,
+    }
+  }
+
+  /// Set the checksum of the entry.
+  #[inline]
+  pub fn set_checksum(&mut self, cks: u32) {
+    self.cks = cks;
   }
 
   /// Set the value pointer flag.
@@ -93,15 +113,21 @@ impl Meta {
   pub const fn is_value_pointer(&self) -> bool {
     self.meta & Self::VALUE_POINTER_FLAG != 0
   }
+
+  /// Returns the metadata as a raw 64-bit value.
+  #[inline]
+  pub(crate) const fn raw(&self) -> u64 {
+    self.meta
+  }
 }
 
 /// A reference to an entry in the log.
 #[derive(Debug, Copy, Clone)]
-pub struct OptionEntryRef<'a, C> {
-  ent: MapOptionEntryRef<'a, Meta, C>,
+pub struct VersionedEntryRef<'a, C> {
+  ent: MapVersionedEntryRef<'a, Meta, C>,
 }
 
-impl<'a, C> OptionEntryRef<'a, C> {
+impl<'a, C> VersionedEntryRef<'a, C> {
   /// Returns the key of the entry.
   #[inline]
   pub const fn key(&self) -> &[u8] {
@@ -133,7 +159,7 @@ impl<'a, C> OptionEntryRef<'a, C> {
   }
 
   #[inline]
-  pub(crate) const fn new(ent: MapOptionEntryRef<'a, Meta, C>) -> Self {
+  pub(crate) const fn new(ent: MapVersionedEntryRef<'a, Meta, C>) -> Self {
     Self { ent }
   }
 }
@@ -348,33 +374,33 @@ mod tests {
 
   #[test]
   fn test_meta() {
-    let meta = Meta::new(0, 0);
+    let meta = Meta::new(0);
     assert_eq!(meta.version(), 0);
     assert!(!meta.is_value_pointer());
     assert!(!meta.is_big_value_pointer());
 
-    let meta = Meta::new(100, 0);
+    let meta = Meta::new(100);
     assert_eq!(meta.version(), 100);
     assert!(!meta.is_value_pointer());
     assert!(!meta.is_big_value_pointer());
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 101, removed: true, value_pointer: false, big_value_pointer: false }"
+      "Meta { version: 101, removed: true, value_pointer: false, big_value_pointer: false, checksum: 0 }"
     );
 
-    let meta = Meta::value_pointer(102, 0);
+    let meta = Meta::value_pointer(102);
     assert_eq!(meta.version(), 102);
     assert!(meta.is_value_pointer());
 
-    let meta = Meta::big_value_pointer(102, 0);
+    let meta = Meta::big_value_pointer(102);
     assert_eq!(meta.version(), 102);
     assert!(!meta.is_value_pointer());
     assert!(meta.is_big_value_pointer());
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 102, removed: false, value_pointer: false, big_value_pointer: true }"
+      "Meta { version: 102, removed: false, value_pointer: false, big_value_pointer: true, checksum: 0 }"
     );
   }
 }

@@ -1,4 +1,4 @@
-use super::{error::LogFileError, options::*, *};
+use super::{error::LogFileError, options::*, util::validate_checksum, *};
 
 use core::{
   cell::RefCell,
@@ -286,11 +286,12 @@ impl<C: Comparator> LogFile<C> {
     // fallback to slow path
     match self.map.get(version, key) {
       Some(ent) => {
+        let trailer = ent.trailer();
         validate_checksum(
-          ent.version(),
+          trailer.version(),
           ent.key(),
           Some(ent.value()),
-          ent.trailer().checksum(),
+          trailer.checksum(),
         )?;
         Ok(Some(EntryRef::new(ent)))
       }
@@ -388,26 +389,5 @@ impl<C: Comparator> LogFile<C> {
       iter: self.map.range_all_versions(version, range),
       yield_: self.min_version() <= version,
     }
-  }
-}
-
-#[inline]
-fn validate_checksum(
-  version: u64,
-  key: &[u8],
-  value: Option<&[u8]>,
-  cks: u32,
-) -> Result<(), LogFileError> {
-  let mut h = crc32fast::Hasher::new();
-  h.update(key);
-  if let Some(value) = value {
-    h.update(value);
-  }
-  h.update(&version.to_le_bytes());
-
-  if h.finalize() != cks {
-    Err(LogFileError::ChecksumMismatch)
-  } else {
-    Ok(())
   }
 }
