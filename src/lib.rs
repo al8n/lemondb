@@ -33,6 +33,7 @@ mod wal;
 
 mod lf;
 mod manifest;
+#[cfg(feature = "std")]
 mod vlf;
 
 mod db;

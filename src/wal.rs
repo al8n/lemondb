@@ -6,6 +6,8 @@ use manifest::ManifestFile;
 #[cfg(feature = "std")]
 use quick_cache::sync::Cache;
 use skl::Ascend;
+
+#[cfg(feature = "std")]
 use vlf::ValueLog;
 
 use self::{manifest::ManifestEvent, util::checksum};
@@ -21,6 +23,7 @@ pub struct LogManager<C = Ascend> {
   lfs: SkipMap<u32, LogFile<C>>,
 
   /// The active value log files.
+  #[cfg(feature = "std")]
   vlfs: SkipMap<u32, Arc<ValueLog>>,
 
   /// Cache for value log files.
