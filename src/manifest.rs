@@ -1,12 +1,11 @@
-use core::mem;
-
 #[cfg(feature = "std")]
 use std::collections::HashSet;
 
+use aol::{CustomFlags, Entry};
 #[cfg(not(feature = "std"))]
 use hashbrown::HashSet;
 
-use crate::options::ManifestOptions;
+use crate::{options::ManifestOptions, Fid};
 
 #[cfg(feature = "std")]
 use crate::error::{ManifestError, UnknownManifestEvent};
@@ -14,14 +13,18 @@ use crate::error::{ManifestError, UnknownManifestEvent};
 mod disk;
 mod memory;
 
-#[derive(Clone, Copy, Debug)]
+const MANIFEST_DELETIONS_REWRITE_THRESHOLD: usize = 10000;
+const MANIFEST_DELETIONS_RATIO: usize = 10;
+const KB: usize = 1000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 #[non_exhaustive]
 pub(crate) enum ManifestEventKind {
-  AddVlog = 0,
-  AddLog = 1,
-  RemoveVlog = 2,
-  RemoveLog = 3,
+  AddLog = 0,
+  AddVlog = 1,
+  RemoveLog = 2,
+  RemoveVlog = 3,
 }
 
 #[cfg(feature = "std")]
@@ -30,10 +33,10 @@ impl TryFrom<u8> for ManifestEventKind {
 
   fn try_from(value: u8) -> Result<Self, Self::Error> {
     Ok(match value {
-      0 => Self::AddVlog,
-      1 => Self::AddLog,
-      2 => Self::RemoveVlog,
-      3 => Self::RemoveLog,
+      0 => Self::AddLog,
+      1 => Self::AddVlog,
+      2 => Self::RemoveLog,
+      3 => Self::RemoveVlog,
       _ => return Err(UnknownManifestEvent(value)),
     })
   }
@@ -52,36 +55,52 @@ impl ManifestEventKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ManifestEvent {
-  kind: ManifestEventKind,
-  fid: u32,
+pub(crate) struct ManifestEntry {
+  entry: aol::Entry<Fid>,
 }
 
-impl ManifestEvent {
-  const MAX_ENCODED_SIZE: usize = mem::size_of::<u8>()  // kind
-    + mem::size_of::<u32>() // fid
-    + mem::size_of::<u32>() // checksum 
-    + 1; // newline character
+impl ManifestEntry {
+  #[inline]
+  pub(crate) const fn add_log(fid: Fid) -> Self {
+    Self {
+      entry: Entry::creation(fid),
+    }
+  }
 
   #[inline]
-  pub(crate) const fn add_log(fid: u32) -> Self {
+  pub(crate) fn add_vlog(fid: Fid) -> Self {
     Self {
-      kind: ManifestEventKind::AddLog,
-      fid,
+      entry: Entry::creation_with_custom_flags(CustomFlags::empty().with_bit1(), fid),
+    }
+  }
+
+  #[inline]
+  pub(crate) fn remove_log(fid: Fid) -> Self {
+    Self {
+      entry: Entry::deletion(fid),
+    }
+  }
+
+  #[inline]
+  pub(crate) fn remove_vlog(fid: Fid) -> Self {
+    Self {
+      entry: Entry::deletion_with_custom_flags(CustomFlags::empty().with_bit1(), fid),
     }
   }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Manifest {
-  vlogs: HashSet<u32>,
-  logs: HashSet<u32>,
-  last_fid: u32,
+  vlogs: HashSet<Fid>,
+  logs: HashSet<Fid>,
+  last_fid: Fid,
 
   // Contains total number of creation and deletion changes in the manifest -- used to compute
   // whether it'd be useful to rewrite the manifest.
   creations: usize,
   deletions: usize,
+
+  opts: ManifestOptions,
 }
 
 #[derive(derive_more::From)]
@@ -102,17 +121,13 @@ impl ManifestFile {
     opts: ManifestOptions,
   ) -> Result<Self, ManifestError> {
     match dir {
-      Some(dir) => disk::DiskManifest::open(
-        dir,
-        opts.rewrite_threshold,
-        opts.external_version,
-        opts.version,
-      )
-      .map(|file| Self {
-        kind: ManifestFileKind::Disk(file),
-      }),
+      Some(dir) => disk::DiskManifest::open(dir, opts.rewrite_threshold, opts.version)
+        .map(|file| Self {
+          kind: ManifestFileKind::Disk(file),
+        })
+        .map_err(Into::into),
       None => Ok(Self {
-        kind: ManifestFileKind::Memory(memory::MemoryManifest::new()),
+        kind: ManifestFileKind::Memory(memory::MemoryManifest::new(opts)),
       }),
     }
   }
@@ -125,37 +140,31 @@ impl ManifestFile {
   }
 
   #[inline]
-  pub fn append(&mut self, event: ManifestEvent) -> Result<(), ManifestError> {
+  pub fn append(&mut self, ent: Entry<Fid>) -> Result<(), ManifestError> {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => {
-        m.append(event);
+        m.append(ent);
         Ok(())
       }
       #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.append(event),
+      ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
     }
   }
 
   #[inline]
-  pub fn flush(&mut self) -> Result<(), ManifestError> {
+  pub fn append_batch(&mut self, entries: Vec<Entry<Fid>>) -> Result<(), ManifestError> {
     match &mut self.kind {
-      ManifestFileKind::Memory(_) => Ok(()),
+      ManifestFileKind::Memory(m) => {
+        m.append_batch(entries);
+        Ok(())
+      }
       #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.flush(),
+      ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),
     }
   }
 
   #[inline]
-  pub fn sync_all(&mut self) -> Result<(), ManifestError> {
-    match &mut self.kind {
-      ManifestFileKind::Memory(_) => Ok(()),
-      #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.sync_all(),
-    }
-  }
-
-  #[inline]
-  pub const fn last_fid(&self) -> u32 {
+  pub const fn last_fid(&self) -> Fid {
     match &self.kind {
       ManifestFileKind::Memory(m) => m.last_fid(),
       #[cfg(feature = "std")]

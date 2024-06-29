@@ -237,7 +237,7 @@ impl Entry {
 
 /// Value pointer encode/decode error.
 #[derive(Debug, Copy, Clone)]
-pub enum ValuePointerError {
+pub enum PointerError {
   /// Buffer is too small to encode the value pointer.
   BufferTooSmall,
   /// Not enough bytes to decode the value pointer.
@@ -246,14 +246,14 @@ pub enum ValuePointerError {
   VarintError(VarintError),
 }
 
-impl From<VarintError> for ValuePointerError {
+impl From<VarintError> for PointerError {
   #[inline]
   fn from(e: VarintError) -> Self {
     Self::VarintError(e)
   }
 }
 
-impl core::fmt::Display for ValuePointerError {
+impl core::fmt::Display for PointerError {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
       Self::BufferTooSmall => write!(f, "encode buffer too small"),
@@ -264,16 +264,16 @@ impl core::fmt::Display for ValuePointerError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for ValuePointerError {}
+impl std::error::Error for PointerError {}
 
-/// A pointer to the value in the log.
-pub struct ValuePointer {
+/// A pointer to the bytes in the log.
+pub struct Pointer {
   fid: u32,
   size: u64,
   offset: u64,
 }
 
-impl ValuePointer {
+impl Pointer {
   /// Create a new value pointer with the given file id, size, and offset.
   #[inline]
   pub const fn new(fid: u32, size: u64, offset: u64) -> Self {
@@ -299,22 +299,22 @@ impl ValuePointer {
   }
 }
 
-impl ValuePointer {
+impl Pointer {
   pub(crate) const MAX_ENCODING_SIZE: usize = 1 + 5 + 10 + 10; // 1 byte for encoded size and 3 varints
 
   /// Returns the encoded size of the value pointer.
   #[inline]
-  pub fn encoded_size(&self) -> usize {
+  pub const fn encoded_size(&self) -> usize {
     1 + encoded_len_varint(self.fid as u64)
       + encoded_len_varint(self.size)
       + encoded_len_varint(self.offset)
   }
 
   /// Encodes the value pointer into the buffer.
-  pub fn encode(&self, buf: &mut [u8]) -> Result<usize, ValuePointerError> {
+  pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PointerError> {
     let encoded_size = self.encoded_size();
     if buf.len() < encoded_size {
-      return Err(ValuePointerError::BufferTooSmall);
+      return Err(PointerError::BufferTooSmall);
     }
 
     let mut offset = 0;
@@ -334,14 +334,14 @@ impl ValuePointer {
   }
 
   /// Decodes the value pointer from the buffer.
-  pub fn decode(buf: &[u8]) -> Result<(usize, Self), ValuePointerError> {
+  pub fn decode(buf: &[u8]) -> Result<(usize, Self), PointerError> {
     if buf.is_empty() {
-      return Err(ValuePointerError::NotEnoughBytes);
+      return Err(PointerError::NotEnoughBytes);
     }
 
     let encoded_size = buf[0] as usize;
     if buf.len() < encoded_size {
-      return Err(ValuePointerError::NotEnoughBytes);
+      return Err(PointerError::NotEnoughBytes);
     }
 
     let mut cur = 1;

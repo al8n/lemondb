@@ -5,10 +5,12 @@ use lf::LogFile;
 use manifest::ManifestFile;
 #[cfg(feature = "std")]
 use quick_cache::sync::Cache;
-use skl::Ascend;
+use skl::{Ascend, Trailer};
 
 #[cfg(feature = "std")]
 use vlf::ValueLog;
+
+use crate::options::CreateOptions;
 
 use self::{manifest::ManifestEvent, util::checksum};
 
@@ -62,7 +64,11 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
     let cks = checksum(meta.raw(), key, Some(val));
     meta.set_checksum(cks);
 
-    // Finally, write the entry to the key log
+    self.insert_to_log(meta, key, val)
+  }
+
+  #[inline]
+  fn insert_to_log(&mut self, meta: Meta, key: &[u8], val: &[u8]) -> Result<(), Error> {
     {
       let active_lf = self.lfs.back().expect("no active log file");
       match active_lf.value().insert(meta, key, val) {
@@ -89,16 +95,6 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
   ) -> Result<(), Error> {
     meta.set_value_pointer();
 
-    let active_lf = self.lfs.back().expect("no active log file");
-    let active_vlf = self.vlfs.back().expect("no active value log file");
-    let last_fid = self.manifest.last_fid();
-    let new_fid = last_fid + 1;
-
-    let mut buf = [0; ValuePointer::MAX_ENCODING_SIZE];
-    let vp = ValuePointer::new(new_fid, val.len() as u64, 0);
-    let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
-    let vp_buf = &buf[..encoded_size];
-
     todo!()
   }
 
@@ -109,6 +105,28 @@ impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
     val: &[u8],
   ) -> Result<(), Error> {
     meta.set_big_value_pointer();
-    todo!()
+
+    let last_fid = self.manifest.last_fid();
+    let new_fid = last_fid + 1;
+
+    let mut vlog = ValueLog::create(CreateOptions::new(new_fid))?;
+    let vp = vlog
+      .write(meta.version(), key, val, meta.checksum())
+      .map_err(|e| {
+        let _ = vlog.remove();
+        e
+      })?;
+    let mut buf = [0; Pointer::MAX_ENCODING_SIZE];
+    // This will never fail because the buffer is big enough
+    let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
+    let vp_buf = &buf[..encoded_size];
+
+    self.insert_to_log(meta, key, vp_buf).and_then(|_| {
+      // write new fid to manifest file
+      self
+        .manifest
+        .append(ManifestEvent::add_vlog(new_fid))
+        .map_err(Into::into)
+    })
   }
 }

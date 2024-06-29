@@ -33,7 +33,10 @@ std = [
   "smallvec-wrapper/default",
 ]
 
+ttl = ["std", "time"]
+
 [dependencies]
+aol = { path = "../aol" }
 ahash = { version = "0.8", default-features = false }
 atomic_refcell = { version = "0.1", default-features = false }
 bytes = { version = "1", default-features = false }
@@ -47,7 +50,7 @@ hashbrown = { version = "0.14", optional = true }
 indexmap = { version = "2", default-features = false }
 memmap2 = { version = "0.9", optional = true }
 quick_cache = { version = "0.5", optional = true }
-skl = { version = "0.10", default-features = false, path = "../skl-rs" }
+skl = { version = "0.11", default-features = false }
 smallvec-wrapper = { version = "0.1", default-features = false, features = ["const_new"] }
 thiserror = { version = "1", optional = true }
 tracing = "0.1"
@@ -59,6 +62,7 @@ crossbeam-channel = { version = "0.5", optional = true }
 
 # future
 
+time = { version = "0.3", optional = true }
 
 
 

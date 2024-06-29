@@ -6,13 +6,6 @@ use memmap2::{Mmap, MmapMut, MmapOptions};
 
 use super::*;
 
-const EXTENSION: &str = "vlog";
-const CHECKSUM_OVERHEAD: u64 = 4;
-
-std::thread_local! {
-  static BUF: RefCell<std::string::String> = RefCell::new(std::string::String::with_capacity(11));
-}
-
 enum Memmap {
   Unmap,
   Map {
@@ -27,44 +20,6 @@ enum Memmap {
   },
 }
 
-impl Memmap {
-  fn unmount(&mut self, size: u64) {
-    match self {
-      Memmap::Map { backed, lock, .. } => {
-        if *lock {
-          let _ = backed.unlock();
-        }
-      }
-      Memmap::MapMut {
-        backed,
-        lock,
-        ref mut mmap,
-      } => {
-        let cks = crc32fast::hash(&mmap[..size as usize]);
-        mmap[size as usize..size as usize + CHECKSUM_OVERHEAD as usize]
-          .copy_from_slice(&cks.to_le_bytes());
-
-        if let Err(e) = backed.set_len(size + CHECKSUM_OVERHEAD) {
-          tracing::error!(err=%e, "failed to truncate value log");
-        }
-
-        if let Err(e) = backed.flush() {
-          tracing::error!(err=%e, "failed to flush value log");
-        }
-
-        if let Err(e) = backed.sync_all() {
-          tracing::error!(err=%e, "failed to sync value log");
-        }
-
-        if *lock {
-          let _ = backed.unlock();
-        }
-      }
-      _ => {}
-    }
-  }
-}
-
 pub struct MmapValueLog {
   fid: u32,
   buf: Memmap,
@@ -76,17 +31,17 @@ pub struct MmapValueLog {
 impl MmapValueLog {
   #[inline]
   pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
-    BUF.with(|buf| {
+    LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:06}.{}", opts.fid, EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid, VLOG_EXTENSION).unwrap();
       let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
         .open(buf.as_str())?;
 
-      file.set_len(opts.size.saturating_add(CHECKSUM_OVERHEAD))?;
+      file.set_len(opts.size)?;
 
       if opts.lock {
         file.lock_exclusive()?;
@@ -109,10 +64,10 @@ impl MmapValueLog {
   }
 
   pub fn open(opts: OpenOptions) -> Result<Self, ValueLogError> {
-    BUF.with(|buf| {
+    LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:06}.{}", opts.fid, EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid, VLOG_EXTENSION).unwrap();
       let file = std::fs::OpenOptions::new().read(true).open(buf.as_str())?;
 
       if opts.lock {
@@ -130,29 +85,23 @@ impl MmapValueLog {
           mmap,
           lock: opts.lock,
         },
-        len: cap - CHECKSUM_OVERHEAD,
-        cap: cap - CHECKSUM_OVERHEAD,
+        len: cap,
+        cap,
         ro: true,
       })
     })
   }
 
+  /// Write a new entry to the value log.
   #[inline]
-  pub fn write(
-    &mut self,
-    version: u64,
-    key: &[u8],
-    val: &[u8],
-    cks: u32,
-  ) -> Result<ValuePointer, ValueLogError> {
+  pub fn write(&mut self, version: u64, kp: Pointer, val: &[u8]) -> Result<Pointer, ValueLogError> {
     if self.ro {
       return Err(ValueLogError::ReadOnly);
     }
 
-    let kl = key.len();
     let vl = val.len();
-    let h = Header::new(version, kl, vl, cks);
-    let encoded_len = h.encoded_len() + kl + vl;
+    let h = Header::new(version, kp, vl);
+    let encoded_len = h.encoded_len() + vl;
 
     match self.buf {
       Memmap::MapMut { ref mut mmap, .. } => {
@@ -173,11 +122,7 @@ impl MmapValueLog {
         cur += kl;
         mmap[cur..cur + vl].copy_from_slice(val);
 
-        Ok(ValuePointer::new(
-          self.fid,
-          encoded_len as u64,
-          offset as u64,
-        ))
+        Ok(Pointer::new(self.fid, encoded_len as u64, offset as u64))
       }
       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
       _ => Err(ValueLogError::Closed),
@@ -229,5 +174,15 @@ impl MmapValueLog {
   #[inline]
   pub const fn fid(&self) -> u32 {
     self.fid
+  }
+
+  #[inline]
+  pub fn remove(&self) -> Result<(), ValueLogError> {
+    LOG_FILENAME_BUFFER.with(|buf| {
+      let mut buf = buf.borrow_mut();
+      buf.clear();
+      write!(buf, "{:010}.{}", self.fid, VLOG_EXTENSION).unwrap();
+      std::fs::remove_file(buf.as_str()).map_err(Into::into)
+    })
   }
 }

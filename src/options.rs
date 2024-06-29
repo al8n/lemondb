@@ -143,15 +143,6 @@ impl ValueLogOptions {
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ManifestOptions {
-  /// The external version of the lemon manifest file. Default is `0`.
-  #[viewit(
-    getter(
-      const,
-      attrs(doc = "Returns the external version of the manifest file.")
-    ),
-    setter(attrs(doc = "Sets the external version of the manifest file."))
-  )]
-  external_version: u16,
   /// The version of the lemon manifest file. Default is `0`.
   #[viewit(
     getter(const, attrs(doc = "Returns the version of the manifest file.")),
@@ -181,7 +172,6 @@ impl ManifestOptions {
   #[inline]
   pub const fn new() -> Self {
     Self {
-      external_version: 0,
       version: 0,
       rewrite_threshold: 10000,
     }

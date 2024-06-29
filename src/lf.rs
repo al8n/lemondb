@@ -7,10 +7,10 @@ use core::{
 use std::io;
 
 use bytes::Bytes;
-use skl::{SkipMap, Trailer};
+use skl::{Options, SkipMap, Trailer};
 
 pub use skl::{
-  Ascend, Comparator, Descend, MmapOptions, OccupiedValue, OpenOptions as SklOpenOptions,
+  Ascend, Comparator, Descend, MmapOptions, OpenOptions as SklOpenOptions, VacantBuffer,
 };
 
 use either::Either;
@@ -19,12 +19,6 @@ mod iter;
 pub use iter::*;
 mod all_versions_iter;
 pub use all_versions_iter::*;
-
-const EXTENSION: &str = "klog";
-
-std::thread_local! {
-  static BUF: RefCell<std::string::String> = RefCell::new(std::string::String::with_capacity(11));
-}
 
 /// A append-only log based on on-disk [`SkipMap`] for key-value databases based on bitcask model.
 pub struct LogFile<C = Ascend> {
@@ -70,7 +64,7 @@ impl<C> LogFile<C> {
   /// Returns the current size of the log.
   #[inline]
   pub fn size(&self) -> usize {
-    self.map.size()
+    self.map.allocated()
   }
 
   /// Returns the capacity of the log.
@@ -87,48 +81,41 @@ impl<C: Comparator> LogFile<C> {
     use std::fmt::Write;
 
     if opts.in_memory {
-      return SkipMap::<Meta, C>::with_comparator(opts.size as usize, cmp)
-        .map(|map| Self {
-          map,
-          fid: opts.fid,
-          sync_on_write: opts.sync_on_write,
-          ro: false,
-          minimum: None,
-          maximum: None,
-          max_version: None,
-          min_version: None,
-        })
-        .map_err(Into::into);
+      return SkipMap::<Meta, C>::with_options_and_comparator(
+        Options::new()
+          .with_capacity(opts.size as u32)
+          .with_magic_version(CURRENT_VERSION),
+        cmp,
+      )
+      .map(|map| Self {
+        map,
+        fid: opts.fid,
+        sync_on_write: opts.sync_on_write,
+        ro: false,
+        minimum: None,
+        maximum: None,
+        max_version: None,
+        min_version: None,
+      })
+      .map_err(Into::into);
     }
 
-    BUF.with(|buf| {
+    LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:06}.{}", opts.fid, EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid, LOG_EXTENSION).unwrap();
       let open_opts = SklOpenOptions::new()
-        .create_new(Some(opts.size))
+        .create_new(Some(opts.size as u32))
         .read(true)
         .write(true)
-        .lock_exclusive(opts.lock)
         .shrink_on_drop(true);
-      SkipMap::<Meta, C>::mmap_mut_with_comparator(buf.as_str(), open_opts, MmapOptions::new(), cmp)
-        .map(|map| Self {
-          map,
-          fid: opts.fid,
-          sync_on_write: opts.sync_on_write,
-          ro: false,
-          minimum: None,
-          maximum: None,
-          max_version: None,
-          min_version: None,
-        })
-        .map_err(Into::into)
-    })
-  }
-
-  #[cfg(not(feature = "std"))]
-  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, LogFileError> {
-    SkipMap::<Meta, C>::with_comparator(opts.size, cmp)
+      SkipMap::<Meta, C>::map_mut_with_options_and_comparator(
+        buf.as_str(),
+        Options::new().with_magic_version(CURRENT_VERSION),
+        open_opts,
+        MmapOptions::new(),
+        cmp,
+      )
       .map(|map| Self {
         map,
         fid: opts.fid,
@@ -140,6 +127,28 @@ impl<C: Comparator> LogFile<C> {
         min_version: None,
       })
       .map_err(Into::into)
+    })
+  }
+
+  #[cfg(not(feature = "std"))]
+  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, LogFileError> {
+    SkipMap::<Meta, C>::with_options_and_comparator(
+      Options::new()
+        .with_capacity(opts.size as u32)
+        .with_magic_version(CURRENT_VERSION),
+      cmp,
+    )
+    .map(|map| Self {
+      map,
+      fid: opts.fid,
+      sync_on_write: opts.sync_on_write,
+      ro: false,
+      minimum: None,
+      maximum: None,
+      max_version: None,
+      min_version: None,
+    })
+    .map_err(Into::into)
   }
 
   /// Open an existing log with the given options.
@@ -150,36 +159,39 @@ impl<C: Comparator> LogFile<C> {
   pub fn open(cmp: C, opts: OpenOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
-    BUF.with(|buf| {
+    LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:06}.{}", opts.fid, EXTENSION).unwrap();
-      let open_opts = SklOpenOptions::new()
-        .read(true)
-        .lock_shared(opts.lock)
-        .shrink_on_drop(true);
-      SkipMap::<Meta, C>::mmap_with_comparator(buf.as_str(), open_opts, MmapOptions::new(), cmp)
-        .map(|map| {
-          let max_version = map.max_version();
-          let min_version = map.min_version();
-          let minimum = map
-            .first(max_version)
-            .map(|ent| Bytes::copy_from_slice(ent.key()));
-          let maximum = map
-            .last(max_version)
-            .map(|ent| Bytes::copy_from_slice(ent.key()));
-          Self {
-            map,
-            fid: opts.fid,
-            sync_on_write: false,
-            ro: true,
-            minimum,
-            maximum,
-            max_version: Some(max_version),
-            min_version: Some(min_version),
-          }
-        })
-        .map_err(Into::into)
+      write!(buf, "{:010}.{}", opts.fid, LOG_EXTENSION).unwrap();
+      let open_opts = SklOpenOptions::new().read(true).shrink_on_drop(true);
+      SkipMap::<Meta, C>::map_with_comparator(
+        buf.as_str(),
+        open_opts,
+        MmapOptions::new(),
+        cmp,
+        CURRENT_VERSION,
+      )
+      .map(|map| {
+        let max_version = map.max_version();
+        let min_version = map.min_version();
+        let minimum = map
+          .first(max_version)
+          .map(|ent| Bytes::copy_from_slice(ent.key()));
+        let maximum = map
+          .last(max_version)
+          .map(|ent| Bytes::copy_from_slice(ent.key()));
+        Self {
+          map,
+          fid: opts.fid,
+          sync_on_write: false,
+          ro: true,
+          minimum,
+          maximum,
+          max_version: Some(max_version),
+          min_version: Some(min_version),
+        }
+      })
+      .map_err(Into::into)
     })
   }
 
@@ -217,17 +229,17 @@ impl<C: Comparator> LogFile<C> {
   /// This method is useful when you want to insert a key and you know the value size but you do not have the value
   /// at this moment.
   ///
-  /// A placeholder value will be inserted first, then you will get an [`OccupiedValue`],
+  /// A placeholder value will be inserted first, then you will get an [`VacantBuffer`],
   /// and you must fully fill the value with bytes later in the closure.
   #[inline]
-  pub fn insert_with<'a, 'b: 'a, E>(
+  pub fn insert_with_value<'a, 'b: 'a, E>(
     &'a self,
     meta: Meta,
     key: &'b [u8],
     value_size: u32,
-    f: impl FnOnce(OccupiedValue<'a>) -> Result<(), E> + Copy,
+    f: impl FnOnce(&mut VacantBuffer<'a>) -> Result<(), E> + Copy,
   ) -> Result<Option<EntryRef<'a, C>>, Either<E, LogFileError>> {
-    match self.map.insert_with(meta, key, value_size, f) {
+    match self.map.insert_with_value(meta, key, value_size, f) {
       Ok(ent) => {
         if self.sync_on_write {
           self.flush().map_err(|e| Either::Right(e.into()))?;

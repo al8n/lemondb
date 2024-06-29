@@ -9,6 +9,7 @@ use core::cell::UnsafeCell;
 
 #[cfg(feature = "std")]
 mod mmap;
+use error::EncodeHeaderError;
 #[cfg(feature = "std")]
 use mmap::*;
 
@@ -31,22 +32,20 @@ impl core::ops::Deref for EncodedHeader {
 }
 
 struct Header {
-  kl: u16,
+  kp: Pointer,
   vl: u32,
-  cks: u32,
   version: u64,
 }
 
 impl Header {
-  const MAX_ENCODED_SIZE: usize = 3 + 10 + 10;
+  const MAX_ENCODED_SIZE: usize = Pointer::MAX_ENCODING_SIZE + 5 + 10;
   const MIN_ENCODED_SIZE: usize = 1 + 1 + 1;
 
   #[inline]
-  const fn new(version: u64, kl: usize, vl: usize, cks: u32) -> Self {
+  const fn new(version: u64, kp: Pointer, vl: usize) -> Self {
     Self {
-      kl: kl as u16,
+      kp,
       vl: vl as u32,
-      cks,
       version,
     }
   }
@@ -55,15 +54,19 @@ impl Header {
     let mut buf = [0; Self::MAX_ENCODED_SIZE];
 
     let mut cur = 0;
-    // encode key length
-    cur += encode_varint(self.kl as u64, &mut buf)?;
-    let vlcks = self.encode_vlcks();
 
-    // encode value length and checksum
-    cur += encode_varint(vlcks, &mut buf[cur..])?;
+    // encode key length
+    cur += self.kp.encode(&mut buf[cur..]).map_err(|e| match e {
+      PointerError::VarintError(e) => EncodeHeaderError::VarintError(e),
+      PointerError::BufferTooSmall => EncodeHeaderError::BufferTooSmall,
+      PointerError::NotEnoughBytes => unreachable!(),
+    })?;
+    // encode value length
+    cur +=
+      encode_varint(self.vl as u64, &mut buf[cur..]).map_err(EncodeHeaderError::VarintError)?;
 
     // encode version
-    cur += encode_varint(self.version, &mut buf[cur..])?;
+    cur += encode_varint(self.version, &mut buf[cur..]).map_err(EncodeHeaderError::VarintError)?;
 
     Ok(EncodedHeader { buf, len: cur })
   }
@@ -74,25 +77,25 @@ impl Header {
     }
 
     let mut readed = 0;
-    let (kl_size, kl) = decode_varint(buf)?;
-    readed += kl_size;
-    let kl = kl as u16;
+    let (kp_size, kp) = Pointer::decode(&buf[readed..]).map_err(|e| match e {
+      PointerError::VarintError(e) => DecodeHeaderError::VarintError(e),
+      PointerError::NotEnoughBytes => DecodeHeaderError::NotEnoughBytes,
+      PointerError::BufferTooSmall => unreachable!(),
+    })?;
+    readed += kp_size;
 
-    let (vlcks_size, vlcks) = decode_varint(&buf[readed..]).map_err(DecodeHeaderError::Deocode)?;
-    readed += vlcks_size;
+    let (vl_size, vl) = decode_varint(&buf[readed..]).map_err(DecodeHeaderError::VarintError)?;
+    readed += vl_size;
 
     let (version_size, version) =
-      decode_varint(&buf[readed..]).map_err(DecodeHeaderError::Deocode)?;
+      decode_varint(&buf[readed..]).map_err(DecodeHeaderError::VarintError)?;
     readed += version_size;
-
-    let (vl, cks) = Self::decode_vlcks(vlcks);
 
     Ok((
       readed,
       Self {
-        kl,
-        vl,
-        cks,
+        kp,
+        vl: vl as u32,
         version,
       },
     ))
@@ -100,19 +103,7 @@ impl Header {
 
   #[inline]
   const fn encoded_len(&self) -> usize {
-    encoded_len_varint(self.kl as u64) + encoded_len_varint(self.encode_vlcks())
-  }
-
-  #[inline]
-  const fn encode_vlcks(&self) -> u64 {
-    // high 32 bits of value length, low 32 bits of checksum
-    ((self.vl as u64) << 32) | self.cks as u64
-  }
-
-  #[inline]
-  const fn decode_vlcks(src: u64) -> (u32, u32) {
-    // high 32 bits of value length, low 32 bits of checksum
-    ((src >> 32) as u32, src as u32)
+    self.kp.encoded_size() + encoded_len_varint(self.vl as u64) + encoded_len_varint(self.version)
   }
 }
 
@@ -141,15 +132,21 @@ impl ValueLog {
     })
   }
 
+  #[cfg(feature = "std")]
+  pub fn remove(&self) -> Result<(), ValueLogError> {
+    match self.kind() {
+      ValueLogKind::Mmap(vlf) => vlf.remove(),
+    }
+  }
+
   pub fn write(
     &mut self,
     version: u64,
     key: &[u8],
     value: &[u8],
-    cks: u32,
-  ) -> Result<ValuePointer, ValueLogError> {
+  ) -> Result<Pointer, ValueLogError> {
     match self.kind_mut() {
-      ValueLogKind::Mmap(vlf) => vlf.write(version, key, value, cks),
+      ValueLogKind::Mmap(vlf) => vlf.write(version, key, value),
     }
   }
 

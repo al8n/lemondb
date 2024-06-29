@@ -1,3 +1,9 @@
+#[cfg(feature = "std")]
+use core::convert::Infallible;
+
+#[cfg(feature = "std")]
+use either::Either;
+
 /// Checksum mismatch.
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
@@ -12,58 +18,57 @@ impl core::fmt::Display for ChecksumMismatch {
 }
 
 /// Errors for manifest file.
-#[derive(Debug)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
-pub enum ManifestError {
-  /// Manifest has bad magic.
-  #[error("manifest has bad magic")]
+pub struct ManifestError {
   #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  BadMagic,
-  /// Cannot open manifest because the external version doesn't match.
-  #[error("cannot open manifest because the external version doesn't match. expected {expected}, found {found}")]
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  BadExternalVersion {
-    /// Expected external version.
-    expected: u16,
-    /// Found external version.
-    found: u16,
-  },
-  /// Cannot open manifest because the version doesn't match.
-  #[error(
-    "cannot open manifest because the version doesn't match. expected {expected}, found {found}"
-  )]
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  BadVersion {
-    /// Expected version.
-    expected: u16,
-    /// Found version.
-    found: u16,
-  },
-  /// Corrupted manifest file: entry checksum mismatch.
-  #[error("corrupted manifest file: entry checksum mismatch")]
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  ChecksumMismatch(#[cfg_attr(feature = "std", from)] ChecksumMismatch),
-
-  /// Corrupted manifest file: not enough bytes to decode manifest entry.
-  #[error("corrupted manifest file: not enough bytes to decode manifest entry")]
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  Corrupted,
-  /// Unknown manifest event.
-  #[error(transparent)]
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  UnknownManifestEvent(#[from] UnknownManifestEvent),
-  /// I/O error.
-  #[error(transparent)]
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  IO(#[from] std::io::Error),
+  source: Either<Infallible, aol::fs::Error<crate::manifest::Manifest>>,
 }
+
+impl core::fmt::Debug for ManifestError {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    #[cfg(feature = "std")]
+    match self.source {
+      Either::Left(e) => e.fmt(f),
+      Either::Right(ref e) => e.fmt(f),
+    }
+
+    #[cfg(not(feature = "std"))]
+    write!(f, "ManifestError")
+  }
+}
+
+#[cfg(feature = "std")]
+impl From<aol::fs::Error<crate::manifest::Manifest>> for ManifestError {
+  fn from(e: aol::fs::Error<crate::manifest::Manifest>) -> Self {
+    Self {
+      source: Either::Right(e),
+    }
+  }
+}
+
+#[cfg(feature = "std")]
+impl From<Infallible> for ManifestError {
+  fn from(e: Infallible) -> Self {
+    Self {
+      source: Either::Left(e),
+    }
+  }
+}
+
+impl core::fmt::Display for ManifestError {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    #[cfg(feature = "std")]
+    match self.source {
+      Either::Left(ref e) => e.fmt(f),
+      Either::Right(ref e) => e.fmt(f),
+    }
+
+    #[cfg(not(feature = "std"))]
+    write!(f, "ManifestError")
+  }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ManifestError {}
 
 /// Unknown manifest event.
 #[cfg(feature = "std")]
@@ -125,13 +130,26 @@ impl core::fmt::Display for LogFileError {
 #[derive(Debug, thiserror::Error)]
 #[cfg(feature = "std")]
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-pub enum DecodeHeaderError {
-  /// Returned when fail to decode header.
+pub enum EncodeHeaderError {
+  /// Buffer is too small to encode the value pointer.
+  #[error("buffer is too small to encode header")]
+  BufferTooSmall,
+  /// Returned when encoding/decoding varint failed.
   #[error("fail to decode header: {0}")]
-  Deocode(#[from] crate::util::VarintError),
-  /// Returned when not enough bytes to decode header.
+  VarintError(#[from] crate::util::VarintError),
+}
+
+/// Errors that can occur when encode/decode header.
+#[derive(Debug, thiserror::Error)]
+#[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+pub enum DecodeHeaderError {
+  /// Not enough bytes to decode the value pointer.
   #[error("not enough bytes to decode header")]
   NotEnoughBytes,
+  /// Returned when encoding/decoding varint failed.
+  #[error("fail to decode header: {0}")]
+  VarintError(#[from] crate::util::VarintError),
 }
 
 /// Error type returned by the value log.
@@ -164,8 +182,8 @@ pub enum ValueLogError {
   DecodeHeader(#[from] DecodeHeaderError),
 
   /// Returned when fail to encode entry header.
-  #[error("fail to encode header: {0}")]
-  EncodeHeader(#[from] crate::util::VarintError),
+  #[error(transparent)]
+  EncodeHeader(#[from] EncodeHeaderError),
 
   /// Returned when the value log does not have enough space to hold the value.
   #[error("value log does not have enough space to hold the value, required: {required}, remaining: {remaining}")]
