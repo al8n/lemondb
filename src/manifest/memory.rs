@@ -16,7 +16,7 @@ impl Snapshot for Manifest {
 
   type Error = core::convert::Infallible;
 
-  fn open(opts: Self::Options) -> Result<Self, Self::Error> {
+  fn new(opts: Self::Options) -> Result<Self, Self::Error> {
     Ok(Self {
       vlogs: HashSet::new(),
       logs: HashSet::new(),

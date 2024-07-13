@@ -32,20 +32,22 @@ impl core::ops::Deref for EncodedHeader {
 }
 
 struct Header {
-  kp: Pointer,
+  kl: u32,
   vl: u32,
+  cks: u32,
   version: u64,
 }
 
 impl Header {
-  const MAX_ENCODED_SIZE: usize = Pointer::MAX_ENCODING_SIZE + 5 + 10;
+  const MAX_ENCODED_SIZE: usize = 5 + 10 + 10;
   const MIN_ENCODED_SIZE: usize = 1 + 1 + 1;
 
   #[inline]
-  const fn new(version: u64, kp: Pointer, vl: usize) -> Self {
+  const fn new(version: u64, kl: usize, vl: usize, cks: u32) -> Self {
     Self {
-      kp,
+      kl: kl as u32,
       vl: vl as u32,
+      cks,
       version,
     }
   }
@@ -54,16 +56,12 @@ impl Header {
     let mut buf = [0; Self::MAX_ENCODED_SIZE];
 
     let mut cur = 0;
-
     // encode key length
-    cur += self.kp.encode(&mut buf[cur..]).map_err(|e| match e {
-      PointerError::VarintError(e) => EncodeHeaderError::VarintError(e),
-      PointerError::BufferTooSmall => EncodeHeaderError::BufferTooSmall,
-      PointerError::NotEnoughBytes => unreachable!(),
-    })?;
-    // encode value length
-    cur +=
-      encode_varint(self.vl as u64, &mut buf[cur..]).map_err(EncodeHeaderError::VarintError)?;
+    cur += encode_varint(self.kl as u64, &mut buf).map_err(EncodeHeaderError::VarintError)?;
+    let vlcks = self.encode_vlcks();
+
+    // encode value length and checksum
+    cur += encode_varint(vlcks, &mut buf[cur..]).map_err(EncodeHeaderError::VarintError)?;
 
     // encode version
     cur += encode_varint(self.version, &mut buf[cur..]).map_err(EncodeHeaderError::VarintError)?;
@@ -77,25 +75,26 @@ impl Header {
     }
 
     let mut readed = 0;
-    let (kp_size, kp) = Pointer::decode(&buf[readed..]).map_err(|e| match e {
-      PointerError::VarintError(e) => DecodeHeaderError::VarintError(e),
-      PointerError::NotEnoughBytes => DecodeHeaderError::NotEnoughBytes,
-      PointerError::BufferTooSmall => unreachable!(),
-    })?;
-    readed += kp_size;
+    let (kl_size, kl) = decode_varint(buf).map_err(DecodeHeaderError::VarintError)?;
+    readed += kl_size;
+    let kl = kl as u32;
 
-    let (vl_size, vl) = decode_varint(&buf[readed..]).map_err(DecodeHeaderError::VarintError)?;
-    readed += vl_size;
+    let (vlcks_size, vlcks) =
+      decode_varint(&buf[readed..]).map_err(DecodeHeaderError::VarintError)?;
+    readed += vlcks_size;
 
     let (version_size, version) =
       decode_varint(&buf[readed..]).map_err(DecodeHeaderError::VarintError)?;
     readed += version_size;
 
+    let (vl, cks) = Self::decode_vlcks(vlcks);
+
     Ok((
       readed,
       Self {
-        kp,
-        vl: vl as u32,
+        kl,
+        vl,
+        cks,
         version,
       },
     ))
@@ -103,7 +102,19 @@ impl Header {
 
   #[inline]
   const fn encoded_len(&self) -> usize {
-    self.kp.encoded_size() + encoded_len_varint(self.vl as u64) + encoded_len_varint(self.version)
+    encoded_len_varint(self.kl as u64) + encoded_len_varint(self.encode_vlcks())
+  }
+
+  #[inline]
+  const fn encode_vlcks(&self) -> u64 {
+    // high 32 bits of value length, low 32 bits of checksum
+    ((self.vl as u64) << 32) | self.cks as u64
+  }
+
+  #[inline]
+  const fn decode_vlcks(src: u64) -> (u32, u32) {
+    // high 32 bits of value length, low 32 bits of checksum
+    ((src >> 32) as u32, src as u32)
   }
 }
 
@@ -117,6 +128,10 @@ impl Header {
 pub struct ValueLog {
   kind: UnsafeCell<ValueLogKind>,
 }
+
+// Safety: ValueLog is thread safe and will not be used concurrently in this crate.
+unsafe impl Send for ValueLog {}
+unsafe impl Sync for ValueLog {}
 
 impl ValueLog {
   pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
@@ -140,24 +155,33 @@ impl ValueLog {
   }
 
   pub fn write(
-    &mut self,
+    &self,
     version: u64,
     key: &[u8],
     value: &[u8],
+    checksum: u32,
   ) -> Result<Pointer, ValueLogError> {
     match self.kind_mut() {
-      ValueLogKind::Mmap(vlf) => vlf.write(version, key, value),
+      ValueLogKind::Mmap(vlf) => vlf.write(version, key, value, checksum),
     }
   }
 
-  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
+  /// Returns a byte slice which contains header, key and value.
+  pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.read(offset, size),
     }
   }
 
+  /// Returns the encoded entry size for the given key and value.
+  pub(crate) fn encoded_entry_size(&self, version: u64, key: &[u8], val: &[u8], cks: u32) -> usize {
+    match self.kind() {
+      ValueLogKind::Mmap(vlf) => vlf.encoded_entry_size(version, key, val, cks),
+    }
+  }
+
   #[inline]
-  pub fn rewind(&mut self, size: usize) -> Result<(), ValueLogError> {
+  pub fn rewind(&self, size: usize) -> Result<(), ValueLogError> {
     match self.kind_mut() {
       ValueLogKind::Mmap(vlf) => vlf.rewind(size),
     }
@@ -183,8 +207,9 @@ impl ValueLog {
       ValueLogKind::Mmap(vlf) => vlf.remaining(),
     }
   }
+
   #[inline]
-  pub fn fid(&self) -> u32 {
+  pub fn fid(&self) -> Fid {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.fid(),
     }

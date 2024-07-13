@@ -55,7 +55,7 @@ std::thread_local! {
   static LOG_FILENAME_BUFFER: core::cell::RefCell<std::string::String> = core::cell::RefCell::new(std::string::String::with_capacity(MAX_DIGITS + VLOG_EXTENSION.len().max(LOG_EXTENSION.len()) + 1));
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Fid(u32);
 
 impl Fid {

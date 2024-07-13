@@ -22,12 +22,14 @@ pub(crate) struct Meta {
 
 impl core::fmt::Debug for Meta {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    f.debug_struct("Meta")
-      .field("version", &self.version())
-      .field("value_pointer", &self.is_value_pointer())
-      .field("big_value_pointer", &self.is_big_value_pointer())
-      .field("checksum", &self.cks)
-      .finish()
+    let mut f = f.debug_struct("Meta");
+    f.field("version", &self.version())
+      .field("checksum", &self.cks);
+    if self.is_big_value_pointer() || self.is_value_pointer() {
+      f.field("pointer", &true).finish()
+    } else {
+      f.field("pointer", &false).finish()
+    }
   }
 }
 
@@ -123,11 +125,11 @@ impl Meta {
 
 /// A reference to an entry in the log.
 #[derive(Debug, Copy, Clone)]
-pub struct VersionedEntryRef<'a, C> {
-  ent: MapVersionedEntryRef<'a, Meta, C>,
+pub struct VersionedEntryRef<'a> {
+  ent: MapVersionedEntryRef<'a, Meta>,
 }
 
-impl<'a, C> VersionedEntryRef<'a, C> {
+impl<'a> VersionedEntryRef<'a> {
   /// Returns the key of the entry.
   #[inline]
   pub const fn key(&self) -> &[u8] {
@@ -159,18 +161,18 @@ impl<'a, C> VersionedEntryRef<'a, C> {
   }
 
   #[inline]
-  pub(crate) const fn new(ent: MapVersionedEntryRef<'a, Meta, C>) -> Self {
+  pub(crate) const fn new(ent: MapVersionedEntryRef<'a, Meta>) -> Self {
     Self { ent }
   }
 }
 
 /// A reference to an entry in the log.
 #[derive(Debug, Copy, Clone)]
-pub struct EntryRef<'a, C> {
-  ent: MapEntryRef<'a, Meta, C>,
+pub struct EntryRef<'a> {
+  ent: MapEntryRef<'a, Meta>,
 }
 
-impl<'a, C> EntryRef<'a, C> {
+impl<'a> EntryRef<'a> {
   /// Returns the key of the entry.
   #[inline]
   pub const fn key(&self) -> &[u8] {
@@ -196,7 +198,7 @@ impl<'a, C> EntryRef<'a, C> {
   }
 
   #[inline]
-  pub(crate) const fn new(ent: MapEntryRef<'a, Meta, C>) -> Self {
+  pub(crate) const fn new(ent: MapEntryRef<'a, Meta>) -> Self {
     Self { ent }
   }
 }
@@ -386,7 +388,7 @@ mod tests {
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 101, removed: true, value_pointer: false, big_value_pointer: false, checksum: 0 }"
+      "Meta { version: 101, removed: true, pointer: false, checksum: 0 }"
     );
 
     let meta = Meta::value_pointer(102);
@@ -400,7 +402,7 @@ mod tests {
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 102, removed: false, value_pointer: false, big_value_pointer: true, checksum: 0 }"
+      "Meta { version: 102, removed: false, pointer: true, checksum: 0 }"
     );
   }
 }

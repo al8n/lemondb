@@ -1,4 +1,4 @@
-use core::{cell::RefCell, mem};
+use core::{cell::RefCell, mem, ptr};
 use std::{fmt::Write, fs::File, io::Write as _};
 
 use fs4::FileExt;
@@ -20,8 +20,25 @@ enum Memmap {
   },
 }
 
+impl Memmap {
+  fn truncate(&mut self, len: u64) -> Result<(), ValueLogError> {
+    match self {
+      Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
+      Memmap::MapMut { backed, mmap, .. } => {
+        backed.set_len(len)?;
+
+        unsafe { ptr::drop_in_place(mmap) };
+
+        *mmap = unsafe { MmapOptions::new().map_mut(&*backed)? };
+        Ok(())
+      }
+      _ => Err(ValueLogError::Closed),
+    }
+  }
+}
+
 pub struct MmapValueLog {
-  fid: u32,
+  fid: Fid,
   buf: Memmap,
   len: u64,
   cap: u64,
@@ -34,7 +51,7 @@ impl MmapValueLog {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid, VLOG_EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid.0, VLOG_EXTENSION).unwrap();
       let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -67,7 +84,7 @@ impl MmapValueLog {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid, VLOG_EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid.0, VLOG_EXTENSION).unwrap();
       let file = std::fs::OpenOptions::new().read(true).open(buf.as_str())?;
 
       if opts.lock {
@@ -92,16 +109,22 @@ impl MmapValueLog {
     })
   }
 
-  /// Write a new entry to the value log.
   #[inline]
-  pub fn write(&mut self, version: u64, kp: Pointer, val: &[u8]) -> Result<Pointer, ValueLogError> {
+  pub fn write(
+    &mut self,
+    version: u64,
+    key: &[u8],
+    val: &[u8],
+    cks: u32,
+  ) -> Result<Pointer, ValueLogError> {
     if self.ro {
       return Err(ValueLogError::ReadOnly);
     }
 
+    let kl = key.len();
     let vl = val.len();
-    let h = Header::new(version, kp, vl);
-    let encoded_len = h.encoded_len() + vl;
+    let h = Header::new(version, kl, vl, cks);
+    let encoded_len = h.encoded_len() + kl + vl;
 
     match self.buf {
       Memmap::MapMut { ref mut mmap, .. } => {
@@ -122,7 +145,7 @@ impl MmapValueLog {
         cur += kl;
         mmap[cur..cur + vl].copy_from_slice(val);
 
-        Ok(Pointer::new(self.fid, encoded_len as u64, offset as u64))
+        Ok(Pointer::new(self.fid.0, encoded_len as u64, offset as u64))
       }
       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
       _ => Err(ValueLogError::Closed),
@@ -130,7 +153,16 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
+  pub(crate) fn encoded_entry_size(&self, version: u64, key: &[u8], val: &[u8], cks: u32) -> usize {
+    let kl = key.len();
+    let vl = val.len();
+    let h = Header::new(version, kl, vl, cks);
+    h.encoded_len() + kl + vl
+  }
+
+  /// Returns a byte slice which contains header, key and value.
+  #[inline]
+  pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     Ok(if offset as u64 + size as u64 <= self.cap {
       match self.buf {
         Memmap::Map { ref mmap, .. } => &mmap[offset..offset + size],
@@ -172,7 +204,7 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub const fn fid(&self) -> u32 {
+  pub const fn fid(&self) -> Fid {
     self.fid
   }
 
@@ -181,7 +213,7 @@ impl MmapValueLog {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", self.fid, VLOG_EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", self.fid.0, VLOG_EXTENSION).unwrap();
       std::fs::remove_file(buf.as_str()).map_err(Into::into)
     })
   }

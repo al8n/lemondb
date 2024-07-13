@@ -1,16 +1,18 @@
+use crate::Fid;
+
 const MB: usize = 1 << 20;
 const GB: usize = 1 << 30;
 
 /// The options for creating a log.
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CreateOptions {
+pub(crate) struct CreateOptions {
   /// The file ID of the log.
   #[viewit(
     getter(const, attrs(doc = "Returns the file ID of the log.")),
     setter(attrs(doc = "Sets the file ID of the log."))
   )]
-  fid: u32,
+  fid: Fid,
 
   /// The maximum size of the log. Default is 2GB.
   ///
@@ -53,7 +55,7 @@ pub struct CreateOptions {
 impl CreateOptions {
   /// Creates a new create options with the default values.
   #[inline]
-  pub const fn new(fid: u32) -> Self {
+  pub const fn new(fid: Fid) -> Self {
     Self {
       fid,
       size: 2 * GB as u64,
@@ -67,13 +69,13 @@ impl CreateOptions {
 /// The options for opening a log.
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OpenOptions {
+pub(crate) struct OpenOptions {
   /// The file ID of the log.
   #[viewit(
     getter(const, attrs(doc = "Returns the file ID of the log.")),
     setter(attrs(doc = "Sets the file ID of the log."))
   )]
-  fid: u32,
+  fid: Fid,
 
   /// Whether to lock the log. Default is `true`.
   ///
@@ -88,7 +90,7 @@ pub struct OpenOptions {
 impl OpenOptions {
   /// Creates a new create options with the default values.
   #[inline]
-  pub const fn new(fid: u32) -> Self {
+  pub const fn new(fid: Fid) -> Self {
     Self { fid, lock: true }
   }
 }
@@ -271,7 +273,7 @@ impl LogManagerOptions {
 
   /// Creates a new log manager options with the given log size.
   #[inline]
-  pub(crate) const fn create_options(&self, fid: u32) -> CreateOptions {
+  pub(crate) const fn create_options(&self, fid: Fid) -> CreateOptions {
     CreateOptions {
       fid,
       size: self.log_size,

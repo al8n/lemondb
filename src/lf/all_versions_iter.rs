@@ -13,7 +13,7 @@ where
   Q: ?Sized + PartialOrd<&'a [u8]>,
   R: RangeBounds<Q>,
 {
-  type Item = Result<VersionedEntryRef<'a, C>, LogFileError>;
+  type Item = Result<VersionedEntryRef<'a>, LogFileError>;
 
   fn next(&mut self) -> Option<Self::Item> {
     if !self.yield_ {
@@ -62,7 +62,7 @@ where
 impl<'a, C, Q, R> LogFileAllVersionsIter<'a, C, Q, R> {
   /// Returns the entry at the current position of the iterator.
   #[inline]
-  pub fn entry(&self) -> Option<VersionedEntryRef<'a, C>> {
+  pub fn entry(&self) -> Option<VersionedEntryRef<'a>> {
     if !self.yield_ {
       return None;
     }
@@ -88,7 +88,7 @@ where
   pub fn seek_upper_bound(
     &mut self,
     upper: Bound<&[u8]>,
-  ) -> Result<Option<VersionedEntryRef<'a, C>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a>>, LogFileError> {
     if !self.yield_ {
       return Ok(None);
     }
@@ -114,7 +114,7 @@ where
   pub fn seek_lower_bound(
     &mut self,
     lower: Bound<&[u8]>,
-  ) -> Result<Option<VersionedEntryRef<'a, C>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a>>, LogFileError> {
     if !self.yield_ {
       return Ok(None);
     }
