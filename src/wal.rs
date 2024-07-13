@@ -21,6 +21,10 @@ use super::{
   *,
 };
 
+mod lf;
+#[cfg(feature = "std")]
+mod vlf;
+
 pub(crate) struct LogManager<C = Ascend> {
   /// All of the log files.
   lfs: SkipMap<Fid, LogFile<C>>,
@@ -36,10 +40,10 @@ pub(crate) struct LogManager<C = Ascend> {
   manifest: ManifestFile,
   opts: LogManagerOptions,
 
-  cmp: C,
+  cmp: Arc<C>,
 }
 
-impl<C: Comparator + Clone + Send + 'static> LogManager<C> {
+impl<C: Comparator> LogManager<C> {
   pub(crate) fn insert(&mut self, version: u64, key: &[u8], val: &[u8]) -> Result<(), Error> {
     let val_len = val.len();
 

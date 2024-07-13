@@ -29,12 +29,8 @@ pub mod error;
 
 #[cfg(feature = "std")]
 mod cache;
-mod wal;
-
-mod lf;
 mod manifest;
-#[cfg(feature = "std")]
-mod vlf;
+mod wal;
 
 mod db;
 pub use db::*;

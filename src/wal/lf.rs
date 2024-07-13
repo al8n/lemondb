@@ -19,7 +19,7 @@ pub use all_versions_iter::*;
 
 /// A append-only log based on on-disk [`SkipMap`] for key-value databases based on bitcask model.
 pub struct LogFile<C = Ascend> {
-  map: SkipMap<Meta, C>,
+  map: SkipMap<Meta, Arc<C>>,
   fid: Fid,
   sync_on_write: bool,
   ro: bool,
@@ -74,11 +74,11 @@ impl<C> LogFile<C> {
 impl<C: Comparator> LogFile<C> {
   /// Create a new log with the given options.
   #[cfg(feature = "std")]
-  pub fn create(cmp: C, opts: CreateOptions) -> Result<Self, LogFileError> {
+  pub fn create(cmp: Arc<C>, opts: CreateOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
     if opts.in_memory {
-      return SkipMap::<Meta, C>::with_options_and_comparator(
+      return SkipMap::<Meta, _>::with_options_and_comparator(
         Options::new()
           .with_capacity(opts.size as u32)
           .with_magic_version(CURRENT_VERSION),
@@ -109,7 +109,7 @@ impl<C: Comparator> LogFile<C> {
         .create_new(Some(opts.size as u32))
         .read(true)
         .write(true);
-      SkipMap::<Meta, C>::map_mut_with_options_and_comparator(
+      SkipMap::<Meta, _>::map_mut_with_options_and_comparator(
         buf.as_str(),
         Options::new().with_magic_version(CURRENT_VERSION),
         open_opts,
@@ -160,7 +160,7 @@ impl<C: Comparator> LogFile<C> {
   /// **Note**: `LogFile` constructed with this method is read only.
   #[cfg(feature = "std")]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  pub fn open(cmp: C, opts: OpenOptions) -> Result<Self, LogFileError> {
+  pub fn open(cmp: Arc<C>, opts: OpenOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
     LOG_FILENAME_BUFFER.with(|buf| {
@@ -168,7 +168,7 @@ impl<C: Comparator> LogFile<C> {
       buf.clear();
       write!(buf, "{:010}.{}", opts.fid.0, LOG_EXTENSION).unwrap();
       let open_opts = SklOpenOptions::new().read(true);
-      SkipMap::<Meta, C>::map_with_comparator(
+      SkipMap::<Meta, _>::map_with_comparator(
         buf.as_str(),
         open_opts,
         MmapOptions::new(),
