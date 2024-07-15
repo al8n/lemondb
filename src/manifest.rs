@@ -474,68 +474,11 @@ enum ManifestFileKind {
   Disk(disk::DiskManifest),
 }
 
-pub(crate) struct ManifestFile {
-  kind: ManifestFileKind,
-  fid: Fid,
-}
+#[cfg(feature = "future")]
+mod future;
+#[cfg(feature = "future")]
+pub(crate) use future::AsyncManifestFile;
 
-impl ManifestFile {
-  #[cfg(feature = "std")]
-  pub fn open<P: AsRef<std::path::Path>>(
-    dir: Option<P>,
-    opts: ManifestOptions,
-  ) -> Result<Self, ManifestFileError> {
-    match dir {
-      Some(dir) => disk::DiskManifest::open(dir, opts.rewrite_threshold, opts.version)
-        .map(|file| Self {
-          fid: Fid::new(0),
-          kind: ManifestFileKind::Disk(file),
-        })
-        .map_err(Into::into),
-      None => Ok(Self {
-        fid: Fid::new(0),
-        kind: ManifestFileKind::Memory(memory::MemoryManifest::new(opts)),
-      }),
-    }
-  }
-
-  #[cfg(not(feature = "std"))]
-  pub fn open() -> Result<Self, ManifestFileError> {
-    Ok(Self {
-      kind: ManifestFileKind::Memory(memory::MemoryManifest::new()),
-    })
-  }
-
-  #[inline]
-  pub fn append(&self, ent: Entry<ManifestRecord>) -> Result<(), ManifestFileError> {
-    match &self.kind {
-      ManifestFileKind::Memory(m) => {
-        m.append(ent);
-        Ok(())
-      }
-      #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
-    }
-  }
-
-  #[inline]
-  pub fn append_batch(&self, entries: Vec<Entry<ManifestRecord>>) -> Result<(), ManifestFileError> {
-    match &self.kind {
-      ManifestFileKind::Memory(m) => {
-        m.append_batch(entries);
-        Ok(())
-      }
-      #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),
-    }
-  }
-
-  #[inline]
-  pub fn last_fid(&self) -> Fid {
-    match &self.kind {
-      ManifestFileKind::Memory(m) => m.last_fid(),
-      #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.last_fid(),
-    }
-  }
-}
+#[cfg(feature = "sync")]
+pub(crate) use sync::ManifestFile;
+mod sync;

@@ -1,9 +1,4 @@
-#[cfg(feature = "std")]
-use parking_lot::Mutex;
-
 use aol::{memory::Snapshot, CustomFlags, Entry};
-
-use crate::Fid;
 
 use super::*;
 
@@ -82,33 +77,32 @@ impl Snapshot for Manifest {
 }
 
 pub(crate) struct MemoryManifest {
-  manifest: Mutex<Manifest>,
+  manifest: Manifest,
 }
 
 impl MemoryManifest {
   #[inline]
   pub(super) fn new(opts: ManifestOptions) -> Self {
     Self {
-      manifest: Mutex::new(Manifest::new(opts).unwrap()),
+      manifest: Manifest::new(opts).unwrap(),
     }
   }
 
   #[inline]
-  pub(super) fn append(&self, entry: aol::Entry<ManifestRecord>) {
-    self.manifest.lock().insert(entry).unwrap();
+  pub(super) fn append(&mut self, entry: aol::Entry<ManifestRecord>) -> Result<(), ManifestError> {
+    self.manifest.insert(entry)
   }
 
   #[inline]
-  pub(super) fn append_batch(&self, entries: Vec<aol::Entry<ManifestRecord>>) {
-    self
-      .manifest
-      .lock()
-      .insert_batch(entries.into_iter())
-      .unwrap();
+  pub(super) fn append_batch(
+    &mut self,
+    entries: Vec<aol::Entry<ManifestRecord>>,
+  ) -> Result<(), ManifestError> {
+    self.manifest.insert_batch(entries.into_iter())
   }
 
   #[inline]
   pub(super) fn last_fid(&self) -> Fid {
-    self.manifest.lock().last_fid
+    self.manifest.last_fid
   }
 }

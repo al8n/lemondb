@@ -4,9 +4,6 @@ use aol::{
   fs::{AppendLog, Error, Options},
   Entry,
 };
-use parking_lot::Mutex;
-
-use crate::Fid;
 
 use super::*;
 
@@ -55,7 +52,7 @@ impl aol::fs::Snapshot for Manifest {
 }
 
 pub(super) struct DiskManifest {
-  log: Mutex<AppendLog<Manifest>>,
+  log: AppendLog<Manifest>,
 }
 
 impl DiskManifest {
@@ -75,26 +72,24 @@ impl DiskManifest {
       Options::new().with_magic_version(version),
     )?;
 
-    Ok(Self {
-      log: Mutex::new(log),
-    })
+    Ok(Self { log })
   }
 
   #[inline]
-  pub(super) fn append(&self, ent: Entry<ManifestRecord>) -> Result<(), Error<Manifest>> {
-    self.log.lock().append(ent)
+  pub(super) fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), Error<Manifest>> {
+    self.log.append(ent)
   }
 
   #[inline]
   pub(super) fn append_batch(
-    &self,
+    &mut self,
     entries: Vec<Entry<ManifestRecord>>,
   ) -> Result<(), Error<Manifest>> {
-    self.log.lock().append_batch(entries)
+    self.log.append_batch(entries)
   }
 
   #[inline]
   pub(super) fn last_fid(&self) -> Fid {
-    self.log.lock().snapshot().last_fid
+    self.log.snapshot().last_fid
   }
 }
