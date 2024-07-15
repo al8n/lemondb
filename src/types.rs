@@ -3,6 +3,106 @@ use skl::{map::EntryRef as MapEntryRef, map::VersionedEntryRef as MapVersionedEn
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
 
+/// Table id
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TableId(u16);
+
+impl TableId {
+  #[inline]
+  pub(crate) const fn new(id: u16) -> Self {
+    Self(id)
+  }
+
+  /// Returns the next file id.
+  #[inline]
+  pub(crate) const fn next(&self) -> Self {
+    Self(self.0 + 1)
+  }
+
+  /// Increments the file id.
+  #[inline]
+  pub(crate) fn next_assign(&mut self) {
+    self.0 += 1;
+  }
+
+  #[inline]
+  pub(crate) fn max(&self, other: Self) -> Self {
+    Self(self.0.max(other.0))
+  }
+
+  #[inline]
+  pub(crate) fn encode(&self, buf: &mut [u8]) -> Result<usize, VarintError> {
+    encode_varint(self.0 as u64, buf)
+  }
+
+  #[inline]
+  pub(crate) fn decode(buf: &[u8]) -> Result<(usize, Self), VarintError> {
+    let (read, id) = decode_varint(buf)?;
+    Ok((read, Self(id as u16)))
+  }
+
+  #[inline]
+  pub(crate) const fn encoded_len(&self) -> usize {
+    encoded_len_varint(self.0 as u64)
+  }
+}
+
+impl core::fmt::Display for TableId {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    write!(f, "{}", self.0)
+  }
+}
+
+/// File id
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Fid(u64);
+
+impl Fid {
+  #[inline]
+  pub(crate) const fn new(fid: u64) -> Self {
+    Self(fid)
+  }
+
+  /// Returns the next file id.
+  #[inline]
+  pub(crate) const fn next(&self) -> Self {
+    Self(self.0 + 1)
+  }
+
+  /// Increments the file id.
+  #[inline]
+  pub(crate) fn next_assign(&mut self) {
+    self.0 += 1;
+  }
+
+  #[inline]
+  pub(crate) fn max(&self, other: Self) -> Self {
+    Self(self.0.max(other.0))
+  }
+
+  #[inline]
+  pub(crate) fn encode(&self, buf: &mut [u8]) -> Result<usize, VarintError> {
+    encode_varint(self.0, buf)
+  }
+
+  #[inline]
+  pub(crate) fn decode(buf: &[u8]) -> Result<(usize, Self), VarintError> {
+    let (read, fid) = decode_varint(buf)?;
+    Ok((read, Self(fid)))
+  }
+
+  #[inline]
+  pub(crate) const fn encoded_len(&self) -> usize {
+    encoded_len_varint(self.0)
+  }
+}
+
+impl core::fmt::Display for Fid {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    write!(f, "{:020}", self.0)
+  }
+}
+
 /// The metadata for the skip log.
 ///
 /// The metadata is a 64-bit value with the following layout:
@@ -214,7 +314,7 @@ pub struct Entry {
 impl Entry {
   /// Create a new entry with the given key, value, and metadata.
   #[inline]
-  pub const fn new(key: Bytes, value: Bytes, meta: Meta) -> Self {
+  pub(crate) const fn new(key: Bytes, value: Bytes, meta: Meta) -> Self {
     Self { key, value, meta }
   }
 
@@ -270,7 +370,7 @@ impl std::error::Error for PointerError {}
 
 /// A pointer to the bytes in the log.
 pub struct Pointer {
-  fid: u32,
+  fid: Fid,
   size: u64,
   offset: u64,
 }
@@ -278,13 +378,13 @@ pub struct Pointer {
 impl Pointer {
   /// Create a new value pointer with the given file id, size, and offset.
   #[inline]
-  pub const fn new(fid: u32, size: u64, offset: u64) -> Self {
+  pub const fn new(fid: Fid, size: u64, offset: u64) -> Self {
     Self { fid, size, offset }
   }
 
   /// Returns the id of the file which contains the value.
   #[inline]
-  pub const fn fid(&self) -> u32 {
+  pub const fn fid(&self) -> Fid {
     self.fid
   }
 
@@ -307,9 +407,7 @@ impl Pointer {
   /// Returns the encoded size of the value pointer.
   #[inline]
   pub const fn encoded_size(&self) -> usize {
-    1 + encoded_len_varint(self.fid as u64)
-      + encoded_len_varint(self.size)
-      + encoded_len_varint(self.offset)
+    1 + self.fid.encoded_len() + encoded_len_varint(self.size) + encoded_len_varint(self.offset)
   }
 
   /// Encodes the value pointer into the buffer.
@@ -323,9 +421,9 @@ impl Pointer {
     buf[offset] = encoded_size as u8;
     offset += 1;
 
+    offset += self.fid.encode(&mut buf[offset..])?;
     offset += encode_varint(self.offset, &mut buf[offset..])?;
     offset += encode_varint(self.size, &mut buf[offset..])?;
-    offset += encode_varint(self.fid as u64, &mut buf[offset..])?;
 
     debug_assert_eq!(
       encoded_size, offset,
@@ -347,7 +445,7 @@ impl Pointer {
     }
 
     let mut cur = 1;
-    let (read, fid) = decode_varint(&buf[cur..])?;
+    let (read, fid) = Fid::decode(&buf[cur..])?;
     cur += read;
     let (read, size) = decode_varint(&buf[cur..])?;
     cur += read;
@@ -359,14 +457,7 @@ impl Pointer {
       encoded_size, cur
     );
 
-    Ok((
-      encoded_size,
-      Self {
-        fid: fid as u32,
-        size,
-        offset,
-      },
-    ))
+    Ok((encoded_size, Self { fid, size, offset }))
   }
 }
 

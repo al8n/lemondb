@@ -4,6 +4,7 @@ use aol::{
   fs::{AppendLog, Error, Options},
   Entry,
 };
+use parking_lot::Mutex;
 
 use crate::Fid;
 
@@ -12,17 +13,17 @@ use super::*;
 const MANIFEST_FILENAME: &str = "MANIFEST";
 
 impl aol::fs::Snapshot for Manifest {
-  type Data = Fid;
+  type Record = ManifestRecord;
 
   type Options = ManifestOptions;
 
-  type Error = core::convert::Infallible;
+  type Error = ManifestError;
 
   fn new(opts: Self::Options) -> Result<Self, Self::Error> {
     Ok(Self {
-      vlogs: HashSet::new(),
-      logs: HashSet::new(),
-      last_fid: Fid(0),
+      tables: HashMap::new(),
+      last_fid: Fid::new(0),
+      last_table_id: TableId::new(0),
       creations: 0,
       deletions: 0,
       opts,
@@ -34,34 +35,19 @@ impl aol::fs::Snapshot for Manifest {
       && self.deletions > MANIFEST_DELETIONS_RATIO * self.creations.saturating_sub(self.deletions)
   }
 
-  fn insert(&mut self, entry: aol::Entry<Self::Data>) -> Result<(), Self::Error> {
-    let fid = *entry.data();
-    self.last_fid = self.last_fid.max(fid);
-    if entry.flag().custom_flag().bit1() {
-      self.vlogs.insert(fid);
-    } else {
-      self.logs.insert(fid);
-    }
-    Ok(())
+  #[inline]
+  fn validate(&self, entry: &Entry<Self::Record>) -> Result<(), Self::Error> {
+    self.validate_in(entry)
   }
 
-  fn insert_batch(&mut self, entries: Vec<aol::Entry<Self::Data>>) -> Result<(), Self::Error> {
-    for entry in entries {
-      let fid = *entry.data();
-      self.last_fid = self.last_fid.max(fid);
-      if entry.flag().custom_flag().bit1() {
-        self.vlogs.insert(fid);
-      } else {
-        self.logs.insert(fid);
-      }
-    }
-    Ok(())
+  #[inline]
+  fn insert(&mut self, entry: aol::Entry<Self::Record>) -> Result<(), Self::Error> {
+    self.insert_in(entry)
   }
 
   fn clear(&mut self) -> Result<(), Self::Error> {
-    self.vlogs.clear();
-    self.logs.clear();
-    self.last_fid = Fid(0);
+    self.tables.clear();
+    self.last_fid = Fid::new(0);
     self.creations = 0;
     self.deletions = 0;
     Ok(())
@@ -69,12 +55,12 @@ impl aol::fs::Snapshot for Manifest {
 }
 
 pub(super) struct DiskManifest {
-  log: AppendLog<Manifest>,
+  log: Mutex<AppendLog<Manifest>>,
 }
 
 impl DiskManifest {
   /// Open and replay the manifest file.
-  pub fn open<P: AsRef<Path>>(
+  pub(super) fn open<P: AsRef<Path>>(
     path: P,
     rewrite_threshold: usize,
     version: u16,
@@ -89,21 +75,26 @@ impl DiskManifest {
       Options::new().with_magic_version(version),
     )?;
 
-    Ok(Self { log })
+    Ok(Self {
+      log: Mutex::new(log),
+    })
   }
 
   #[inline]
-  pub fn append(&mut self, ent: Entry<Fid>) -> Result<(), Error<Manifest>> {
-    self.log.append(ent)
+  pub(super) fn append(&self, ent: Entry<ManifestRecord>) -> Result<(), Error<Manifest>> {
+    self.log.lock().append(ent)
   }
 
   #[inline]
-  pub fn append_batch(&mut self, entries: Vec<Entry<Fid>>) -> Result<(), Error<Manifest>> {
-    self.log.append_batch(entries)
+  pub(super) fn append_batch(
+    &self,
+    entries: Vec<Entry<ManifestRecord>>,
+  ) -> Result<(), Error<Manifest>> {
+    self.log.lock().append_batch(entries)
   }
 
   #[inline]
-  pub const fn last_fid(&self) -> Fid {
-    self.log.snapshot().last_fid
+  pub(super) fn last_fid(&self) -> Fid {
+    self.log.lock().snapshot().last_fid
   }
 }

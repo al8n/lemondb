@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use atomic_refcell::AtomicRefCell;
 use indexmap::IndexMap;
 pub use skl::{Ascend, Comparator, Descend};
 

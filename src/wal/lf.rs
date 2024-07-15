@@ -104,7 +104,7 @@ impl<C: Comparator> LogFile<C> {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid.0, LOG_EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid, LOG_EXTENSION).unwrap();
       let open_opts = SklOpenOptions::new()
         .create_new(Some(opts.size as u32))
         .read(true)
@@ -166,7 +166,7 @@ impl<C: Comparator> LogFile<C> {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid.0, LOG_EXTENSION).unwrap();
+      write!(buf, "{:010}.{}", opts.fid, LOG_EXTENSION).unwrap();
       let open_opts = SklOpenOptions::new().read(true);
       SkipMap::<Meta, _>::map_with_comparator(
         buf.as_str(),

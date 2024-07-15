@@ -4,6 +4,8 @@ use core::convert::Infallible;
 #[cfg(feature = "std")]
 use either::Either;
 
+use crate::manifest::ManifestFileError;
+
 /// Checksum mismatch.
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
@@ -16,65 +18,6 @@ impl core::fmt::Display for ChecksumMismatch {
     write!(f, "checksum mismatch")
   }
 }
-
-/// Errors for manifest file.
-pub struct ManifestError {
-  #[cfg(feature = "std")]
-  source: Either<Infallible, aol::fs::Error<crate::manifest::Manifest>>,
-}
-
-impl core::fmt::Debug for ManifestError {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    #[cfg(feature = "std")]
-    match self.source {
-      Either::Left(e) => e.fmt(f),
-      Either::Right(ref e) => e.fmt(f),
-    }
-
-    #[cfg(not(feature = "std"))]
-    write!(f, "ManifestError")
-  }
-}
-
-#[cfg(feature = "std")]
-impl From<aol::fs::Error<crate::manifest::Manifest>> for ManifestError {
-  fn from(e: aol::fs::Error<crate::manifest::Manifest>) -> Self {
-    Self {
-      source: Either::Right(e),
-    }
-  }
-}
-
-#[cfg(feature = "std")]
-impl From<Infallible> for ManifestError {
-  fn from(e: Infallible) -> Self {
-    Self {
-      source: Either::Left(e),
-    }
-  }
-}
-
-impl core::fmt::Display for ManifestError {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    #[cfg(feature = "std")]
-    match self.source {
-      Either::Left(ref e) => e.fmt(f),
-      Either::Right(ref e) => e.fmt(f),
-    }
-
-    #[cfg(not(feature = "std"))]
-    write!(f, "ManifestError")
-  }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ManifestError {}
-
-/// Unknown manifest event.
-#[cfg(feature = "std")]
-#[derive(Clone, Copy, Debug, thiserror::Error)]
-#[error("unknown manifest event: {0}")]
-pub struct UnknownManifestEvent(pub(crate) u8);
 
 /// Errors that can occur when working with a log.
 #[derive(Debug)]
@@ -220,7 +163,7 @@ pub enum Error {
   LogFile(#[cfg_attr(feature = "std", from)] LogFileError),
   /// A manifest file error occurred.
   #[cfg_attr(feature = "std", error(transparent))]
-  Manifest(#[cfg_attr(feature = "std", from)] ManifestError),
+  Manifest(#[cfg_attr(feature = "std", from)] ManifestFileError),
   /// A value log error occurred.
   #[cfg_attr(feature = "std", error(transparent))]
   ValueLog(#[cfg_attr(feature = "std", from)] ValueLogError),

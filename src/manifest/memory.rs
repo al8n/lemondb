@@ -1,30 +1,33 @@
 #[cfg(feature = "std")]
-use std::collections::HashSet;
+use parking_lot::Mutex;
 
 use aol::{memory::Snapshot, CustomFlags, Entry};
-#[cfg(not(feature = "std"))]
-use hashbrown::HashSet;
 
 use crate::Fid;
 
 use super::*;
 
 impl Snapshot for Manifest {
-  type Data = Fid;
+  type Record = ManifestRecord;
 
   type Options = ManifestOptions;
 
-  type Error = core::convert::Infallible;
+  type Error = ManifestError;
 
   fn new(opts: Self::Options) -> Result<Self, Self::Error> {
     Ok(Self {
-      vlogs: HashSet::new(),
-      logs: HashSet::new(),
-      last_fid: Fid(0),
+      tables: HashMap::new(),
+      last_fid: Fid::new(0),
+      last_table_id: TableId::new(0),
       creations: 0,
       deletions: 0,
       opts,
     })
+  }
+
+  #[inline]
+  fn validate(&self, entry: &Entry<Self::Record>) -> Result<(), Self::Error> {
+    self.validate_in(entry)
   }
 
   fn options(&self) -> &Self::Options {
@@ -36,73 +39,76 @@ impl Snapshot for Manifest {
       && self.deletions > MANIFEST_DELETIONS_RATIO * self.creations.saturating_sub(self.deletions)
   }
 
-  fn insert(&mut self, entry: Entry<Self::Data>) -> Result<(), Self::Error> {
-    let fid = *entry.data();
-    self.last_fid = self.last_fid.max(fid);
-    if entry.flag().custom_flag().bit1() {
-      self.vlogs.insert(fid);
-    } else {
-      self.logs.insert(fid);
-    }
-    Ok(())
+  #[inline]
+  fn insert(&mut self, entry: Entry<Self::Record>) -> Result<(), Self::Error> {
+    self.insert_in(entry)
   }
 
-  fn insert_batch(
-    &mut self,
-    entries: impl Iterator<Item = Entry<Self::Data>>,
-  ) -> Result<(), Self::Error> {
-    for entry in entries {
-      let fid = *entry.data();
-      self.last_fid = self.last_fid.max(fid);
-      if entry.flag().custom_flag().bit1() {
-        self.vlogs.insert(fid);
-      } else {
-        self.logs.insert(fid);
-      }
-    }
-    Ok(())
-  }
-
-  fn into_iter(self) -> impl Iterator<Item = Entry<Self::Data>> {
+  fn into_iter(self) -> impl Iterator<Item = Entry<Self::Record>> {
     self
-      .vlogs
+      .tables
       .into_iter()
-      .map(|fid| Entry::creation_with_custom_flags(CustomFlags::empty().with_bit1(), fid))
-      .chain(self.logs.into_iter().map(|fid| Entry::creation(fid)))
+      .filter_map(|(tid, table)| {
+        if table.is_removed() {
+          return None;
+        }
+
+        Some(
+          core::iter::once(Entry::creation(ManifestRecord::Table {
+            id: tid,
+            name: table.name,
+          }))
+          .chain(
+            table
+              .vlogs
+              .into_iter()
+              .map(move |fid| {
+                Entry::creation_with_custom_flags(
+                  CustomFlags::empty().with_bit1(),
+                  ManifestRecord::Log { fid, tid },
+                )
+              })
+              .chain(
+                table
+                  .logs
+                  .into_iter()
+                  .map(move |fid| Entry::creation(ManifestRecord::Log { fid, tid })),
+              ),
+          ),
+        )
+      })
+      .flatten()
   }
 }
 
 pub(crate) struct MemoryManifest {
-  manifest: Manifest,
+  manifest: Mutex<Manifest>,
 }
 
 impl MemoryManifest {
   #[inline]
-  pub fn new(opts: ManifestOptions) -> Self {
+  pub(super) fn new(opts: ManifestOptions) -> Self {
     Self {
-      manifest: Manifest {
-        vlogs: HashSet::new(),
-        logs: HashSet::new(),
-        last_fid: Fid(0),
-        creations: 0,
-        deletions: 0,
-        opts,
-      },
+      manifest: Mutex::new(Manifest::new(opts).unwrap()),
     }
   }
 
   #[inline]
-  pub fn append(&mut self, entry: aol::Entry<Fid>) {
-    self.manifest.insert(entry).unwrap();
+  pub(super) fn append(&self, entry: aol::Entry<ManifestRecord>) {
+    self.manifest.lock().insert(entry).unwrap();
   }
 
   #[inline]
-  pub fn append_batch(&mut self, entries: Vec<aol::Entry<Fid>>) {
-    self.manifest.insert_batch(entries.into_iter()).unwrap();
+  pub(super) fn append_batch(&self, entries: Vec<aol::Entry<ManifestRecord>>) {
+    self
+      .manifest
+      .lock()
+      .insert_batch(entries.into_iter())
+      .unwrap();
   }
 
   #[inline]
-  pub const fn last_fid(&self) -> Fid {
-    self.manifest.last_fid
+  pub(super) fn last_fid(&self) -> Fid {
+    self.manifest.lock().last_fid
   }
 }

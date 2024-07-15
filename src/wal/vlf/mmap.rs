@@ -51,7 +51,7 @@ impl MmapValueLog {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid.0, VLOG_EXTENSION).unwrap();
+      write!(buf, "{:020}.{}", opts.fid, VLOG_EXTENSION).unwrap();
       let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -84,7 +84,7 @@ impl MmapValueLog {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid.0, VLOG_EXTENSION).unwrap();
+      write!(buf, "{:020}.{}", opts.fid, VLOG_EXTENSION).unwrap();
       let file = std::fs::OpenOptions::new().read(true).open(buf.as_str())?;
 
       if opts.lock {
@@ -144,8 +144,11 @@ impl MmapValueLog {
         mmap[cur..cur + kl].copy_from_slice(key);
         cur += kl;
         mmap[cur..cur + vl].copy_from_slice(val);
+        cur += vl;
 
-        Ok(Pointer::new(self.fid.0, encoded_len as u64, offset as u64))
+        self.len += cur as u64;
+
+        Ok(Pointer::new(self.fid, encoded_len as u64, offset as u64))
       }
       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
       _ => Err(ValueLogError::Closed),
@@ -213,7 +216,7 @@ impl MmapValueLog {
     LOG_FILENAME_BUFFER.with(|buf| {
       let mut buf = buf.borrow_mut();
       buf.clear();
-      write!(buf, "{:010}.{}", self.fid.0, VLOG_EXTENSION).unwrap();
+      write!(buf, "{:020}.{}", self.fid, VLOG_EXTENSION).unwrap();
       std::fs::remove_file(buf.as_str()).map_err(Into::into)
     })
   }

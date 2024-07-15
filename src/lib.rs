@@ -42,50 +42,11 @@ pub use types::*;
 pub mod util;
 
 const CURRENT_VERSION: u16 = 0;
-const MAX_DIGITS: usize = 10; // u32::MAX has 10 digits
+const MAX_DIGITS: usize = 20; // u64::MAX has 20 digits
 
 const VLOG_EXTENSION: &str = "vlog";
 const LOG_EXTENSION: &str = "wal";
 
 std::thread_local! {
   static LOG_FILENAME_BUFFER: core::cell::RefCell<std::string::String> = core::cell::RefCell::new(std::string::String::with_capacity(MAX_DIGITS + VLOG_EXTENSION.len().max(LOG_EXTENSION.len()) + 1));
-}
-
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Fid(u32);
-
-impl Fid {
-  #[inline]
-  const fn next(&self) -> Self {
-    Self(self.0 + 1)
-  }
-
-  #[inline]
-  fn next_assign(&mut self) {
-    self.0 += 1;
-  }
-
-  #[inline]
-  fn max(&self, other: Self) -> Self {
-    Self(self.0.max(other.0))
-  }
-}
-
-#[cfg(feature = "std")]
-impl aol::Data for Fid {
-  type Error = core::convert::Infallible;
-
-  fn encoded_size(&self) -> usize {
-    core::mem::size_of::<u32>()
-  }
-
-  fn encode(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-    buf.copy_from_slice(&self.0.to_le_bytes());
-    Ok(core::mem::size_of::<u32>())
-  }
-
-  fn decode(buf: &[u8]) -> Result<(usize, Self), Self::Error> {
-    let fid = u32::from_le_bytes(buf.try_into().unwrap());
-    Ok((core::mem::size_of::<u32>(), Self(fid)))
-  }
 }
