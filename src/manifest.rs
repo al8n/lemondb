@@ -158,6 +158,11 @@ impl ManifestRecord {
   pub(super) fn log(fid: Fid, tid: TableId) -> Self {
     Self::Log { fid, tid }
   }
+
+  #[inline]
+  pub(super) fn table(table_id: TableId, name: SmolStr) -> Self {
+    Self::Table { id: table_id, name }
+  }
 }
 
 #[cfg(feature = "std")]
@@ -391,6 +396,16 @@ pub(crate) struct Manifest {
 }
 
 impl Manifest {
+  #[inline]
+  pub(crate) fn contains_table(&self, name: &str) -> bool {
+    self.tables.values().any(|table| table.name.eq(name))
+  }
+
+  #[inline]
+  pub(crate) fn get_table(&self, name: &str) -> Option<&TableManifest> {
+    self.tables.values().find(|table| table.name.eq(name))
+  }
+
   fn validate_in(&self, entry: &aol::Entry<ManifestRecord>) -> Result<(), ManifestError> {
     let flag = entry.flag();
     match entry.data() {

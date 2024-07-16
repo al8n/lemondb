@@ -89,7 +89,7 @@ impl DiskManifest {
   }
 
   #[inline]
-  pub(super) fn last_fid(&self) -> Fid {
-    self.log.snapshot().last_fid
+  pub(super) const fn manifest(&self) -> &Manifest {
+    self.log.snapshot()
   }
 }

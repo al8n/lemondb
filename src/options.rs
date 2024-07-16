@@ -183,7 +183,7 @@ impl ManifestOptions {
 /// The options for configuring the write-ahead log.
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LogManagerOptions {
+pub struct WalOptions {
   /// The default size of the write-ahead log size. Default is 2GB.
   #[viewit(
     getter(const, attrs(doc = "Returns the size of the write-ahead log.")),
@@ -249,14 +249,14 @@ pub struct LogManagerOptions {
   in_memory: bool,
 }
 
-impl Default for LogManagerOptions {
+impl Default for WalOptions {
   #[inline]
   fn default() -> Self {
     Self::new()
   }
 }
 
-impl LogManagerOptions {
+impl WalOptions {
   /// Creates a new log manager options with the default values.
   #[inline]
   pub const fn new() -> Self {

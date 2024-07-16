@@ -3,8 +3,9 @@ use core::convert::Infallible;
 
 #[cfg(feature = "std")]
 use either::Either;
+use smol_str::SmolStr;
 
-use crate::manifest::ManifestFileError;
+use crate::{manifest::ManifestFileError, TableId};
 
 /// Checksum mismatch.
 #[derive(Debug)]
@@ -153,6 +154,12 @@ pub enum ValueLogError {
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum Error {
+  /// Table not found.
+  #[cfg_attr(feature = "std", error("table {0} does not exist"))]
+  TableNotFound(SmolStr),
+  /// Table already exists.
+  #[cfg_attr(feature = "std", error("table {0} already exists"))]
+  TableAlreadyExists(SmolStr),
   /// An I/O error occurred.
   #[cfg(feature = "std")]
   #[cfg_attr(feature = "std", error(transparent))]

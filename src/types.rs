@@ -1,7 +1,33 @@
+use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+
 use bytes::Bytes;
 use skl::{map::EntryRef as MapEntryRef, map::VersionedEntryRef as MapVersionedEntryRef, Trailer};
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
+
+pub(crate) struct AtomicTableId(AtomicU16);
+
+impl AtomicTableId {
+  #[inline]
+  pub(crate) const fn new(id: TableId) -> Self {
+    Self(AtomicU16::new(id.0))
+  }
+
+  #[inline]
+  pub(crate) const fn zero() -> Self {
+    Self(AtomicU16::new(0))
+  }
+
+  #[inline]
+  pub(crate) fn load(&self) -> TableId {
+    TableId(self.0.load(Ordering::Acquire))
+  }
+
+  #[inline]
+  pub(crate) fn increment(&self) -> TableId {
+    TableId(self.0.fetch_add(1, Ordering::AcqRel))
+  }
+}
 
 /// Table id
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -50,6 +76,30 @@ impl TableId {
 impl core::fmt::Display for TableId {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     write!(f, "{}", self.0)
+  }
+}
+
+pub(crate) struct AtomicFid(AtomicU64);
+
+impl AtomicFid {
+  #[inline]
+  pub(crate) const fn new(fid: Fid) -> Self {
+    Self(AtomicU64::new(fid.0))
+  }
+
+  #[inline]
+  pub(crate) const fn zero() -> Self {
+    Self(AtomicU64::new(0))
+  }
+
+  #[inline]
+  pub(crate) fn load(&self) -> Fid {
+    Fid(self.0.load(Ordering::Acquire))
+  }
+
+  #[inline]
+  pub(crate) fn increment(&self) -> Fid {
+    Fid(self.0.fetch_add(1, Ordering::AcqRel))
   }
 }
 

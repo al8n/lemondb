@@ -102,7 +102,7 @@ impl MemoryManifest {
   }
 
   #[inline]
-  pub(super) fn last_fid(&self) -> Fid {
-    self.manifest.last_fid
+  pub(super) fn manifest(&self) -> &Manifest {
+    &self.manifest
   }
 }

@@ -1,16 +1,11 @@
 use super::*;
 
-#[cfg(not(feature = "parking_lot"))]
-use std::sync::Mutex;
-
-#[cfg(feature = "parking_lot")]
-use parking_lot::Mutex;
-
-use crate::Mu;
+use crate::{AtomicFid, AtomicTableId};
 
 pub(crate) struct ManifestFile {
-  kind: Mutex<ManifestFileKind>,
-  fid: Fid,
+  kind: ManifestFileKind,
+  fid: AtomicFid,
+  tid: AtomicTableId,
 }
 
 impl ManifestFile {
@@ -21,29 +16,33 @@ impl ManifestFile {
   ) -> Result<Self, ManifestFileError> {
     match dir {
       Some(dir) => disk::DiskManifest::open(dir, opts.rewrite_threshold, opts.version)
-        .map(|file| Self {
-          fid: Fid::new(0),
-          kind: Mutex::new(ManifestFileKind::Disk(file)),
+        .map(|file| {
+          let manifest = file.manifest();
+          Self {
+            fid: AtomicFid::new(manifest.last_fid),
+            tid: AtomicTableId::new(manifest.last_table_id),
+            kind: ManifestFileKind::Disk(file),
+          }
         })
         .map_err(Into::into),
       None => Ok(Self {
-        fid: Fid::new(0),
-        kind: Mutex::new(ManifestFileKind::Memory(memory::MemoryManifest::new(opts))),
+        fid: AtomicFid::zero(),
+        tid: AtomicTableId::zero(),
+        kind: ManifestFileKind::Memory(memory::MemoryManifest::new(opts)),
       }),
     }
   }
 
   #[cfg(not(feature = "std"))]
-  pub(crate) fn open() -> Result<Self, ManifestFileError> {
+  pub(crate) fn open(opts: ManifestOptions) -> Result<Self, ManifestFileError> {
     Ok(Self {
-      kind: Mutex::new(ManifestFileKind::Memory(memory::MemoryManifest::new())),
+      kind: ManifestFileKind::Memory(memory::MemoryManifest::new(opts)),
     })
   }
 
   #[inline]
-  pub(crate) fn append(&self, ent: Entry<ManifestRecord>) -> Result<(), ManifestFileError> {
-    let mut kind = self.kind.lock_me();
-    match &mut *kind {
+  pub(crate) fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), ManifestFileError> {
+    match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append(ent).map_err(Into::into),
       #[cfg(feature = "std")]
       ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
@@ -52,11 +51,10 @@ impl ManifestFile {
 
   #[inline]
   pub(crate) fn append_batch(
-    &self,
+    &mut self,
     entries: Vec<Entry<ManifestRecord>>,
   ) -> Result<(), ManifestFileError> {
-    let mut kind = self.kind.lock_me();
-    match &mut *kind {
+    match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append_batch(entries).map_err(Into::into),
       #[cfg(feature = "std")]
       ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),
@@ -64,12 +62,21 @@ impl ManifestFile {
   }
 
   #[inline]
-  pub(crate) fn last_fid(&self) -> Fid {
-    let kind = self.kind.lock_me();
-    match &*kind {
-      ManifestFileKind::Memory(m) => m.last_fid(),
+  pub(crate) fn manifest(&self) -> &Manifest {
+    match &self.kind {
+      ManifestFileKind::Memory(m) => m.manifest(),
       #[cfg(feature = "std")]
-      ManifestFileKind::Disk(d) => d.last_fid(),
+      ManifestFileKind::Disk(d) => d.manifest(),
     }
+  }
+
+  #[inline]
+  pub(crate) fn next_fid(&self) -> Fid {
+    self.fid.increment()
+  }
+
+  #[inline]
+  pub(crate) fn next_table_id(&self) -> TableId {
+    self.tid.increment()
   }
 }
