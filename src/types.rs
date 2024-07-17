@@ -108,6 +108,9 @@ impl AtomicFid {
 pub struct Fid(u64);
 
 impl Fid {
+  /// use as a placeholder marker for the maximum file id.
+  pub(crate) const MAX: Fid = Fid(u64::MAX);
+
   #[inline]
   pub(crate) const fn new(fid: u64) -> Self {
     Self(fid)

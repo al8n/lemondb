@@ -7,15 +7,26 @@ use super::{
 
 use core::cell::UnsafeCell;
 
-#[cfg(feature = "std")]
-mod mmap;
 use error::EncodeHeaderError;
+
 #[cfg(feature = "std")]
 use mmap::*;
+#[cfg(feature = "std")]
+use mmap_anon::*;
+
+#[cfg(feature = "std")]
+mod mmap;
+#[cfg(feature = "std")]
+mod mmap_anon;
 
 #[derive(derive_more::From)]
 enum ValueLogKind {
+  Placeholder(Fid),
+  // Memory(MemoryValueLog),
+  #[cfg(feature = "std")]
   Mmap(MmapValueLog),
+  #[cfg(feature = "std")]
+  MmapAnon(MmapAnonValueLog),
 }
 
 struct EncodedHeader {
@@ -134,6 +145,12 @@ unsafe impl Send for ValueLog {}
 unsafe impl Sync for ValueLog {}
 
 impl ValueLog {
+  pub fn placeholder(fid: Fid) -> Self {
+    Self {
+      kind: UnsafeCell::new(ValueLogKind::Placeholder(fid)),
+    }
+  }
+
   pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
     Ok(Self {
       kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::create(opts)?)),
@@ -149,8 +166,10 @@ impl ValueLog {
 
   #[cfg(feature = "std")]
   pub fn remove(&self) -> Result<(), ValueLogError> {
-    match self.kind() {
+    match self.kind_mut() {
       ValueLogKind::Mmap(vlf) => vlf.remove(),
+      ValueLogKind::MmapAnon(vlf) => vlf.remove(),
+      ValueLogKind::Placeholder(_) => Ok(()),
     }
   }
 
@@ -163,6 +182,11 @@ impl ValueLog {
   ) -> Result<Pointer, ValueLogError> {
     match self.kind_mut() {
       ValueLogKind::Mmap(vlf) => vlf.write(version, key, value, checksum),
+      ValueLogKind::MmapAnon(vlf) => vlf.write(version, key, value, checksum),
+      ValueLogKind::Placeholder(_) => Err(ValueLogError::NotEnoughSpace {
+        required: self.encoded_entry_size(version, key, value, checksum) as u64,
+        remaining: 0,
+      }),
     }
   }
 
@@ -170,20 +194,29 @@ impl ValueLog {
   pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.read(offset, size),
+      ValueLogKind::MmapAnon(vlf) => vlf.read(offset, size),
+      ValueLogKind::Placeholder(_) => Err(ValueLogError::OutOfBound {
+        offset,
+        len: size,
+        size: 0,
+      }),
     }
   }
 
   /// Returns the encoded entry size for the given key and value.
   pub(crate) fn encoded_entry_size(&self, version: u64, key: &[u8], val: &[u8], cks: u32) -> usize {
-    match self.kind() {
-      ValueLogKind::Mmap(vlf) => vlf.encoded_entry_size(version, key, val, cks),
-    }
+    let kl = key.len();
+    let vl = val.len();
+    let h = Header::new(version, kl, vl, cks);
+    h.encoded_len() + kl + vl
   }
 
   #[inline]
   pub fn rewind(&self, size: usize) -> Result<(), ValueLogError> {
     match self.kind_mut() {
       ValueLogKind::Mmap(vlf) => vlf.rewind(size),
+      ValueLogKind::MmapAnon(vlf) => vlf.rewind(size),
+      ValueLogKind::Placeholder(_) => Ok(()),
     }
   }
 
@@ -191,6 +224,8 @@ impl ValueLog {
   pub fn len(&self) -> usize {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.len(),
+      ValueLogKind::MmapAnon(vlf) => vlf.len(),
+      ValueLogKind::Placeholder(_) => 0,
     }
   }
 
@@ -198,6 +233,8 @@ impl ValueLog {
   pub fn capacity(&self) -> u64 {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.capacity(),
+      ValueLogKind::MmapAnon(vlf) => vlf.capacity(),
+      ValueLogKind::Placeholder(_) => 0,
     }
   }
 
@@ -205,6 +242,8 @@ impl ValueLog {
   pub fn remaining(&self) -> u64 {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.remaining(),
+      ValueLogKind::MmapAnon(vlf) => vlf.remaining(),
+      ValueLogKind::Placeholder(_) => 0,
     }
   }
 
@@ -212,6 +251,8 @@ impl ValueLog {
   pub fn fid(&self) -> Fid {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.fid(),
+      ValueLogKind::MmapAnon(vlf) => vlf.fid(),
+      ValueLogKind::Placeholder(fid) => *fid,
     }
   }
 

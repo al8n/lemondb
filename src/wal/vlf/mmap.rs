@@ -166,7 +166,7 @@ impl MmapValueLog {
   /// Returns a byte slice which contains header, key and value.
   #[inline]
   pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
-    Ok(if offset as u64 + size as u64 <= self.cap {
+    Ok(if offset as u64 + size as u64 <= self.len {
       match self.buf {
         Memmap::Map { ref mmap, .. } => &mmap[offset..offset + size],
         Memmap::MapMut { ref mmap, .. } => &mmap[offset..offset + size],

@@ -14,7 +14,7 @@ pub(crate) struct Wal<C = Ascend> {
   lfs: SkipMap<Fid, LogFile<C>>,
 
   /// The active value log files.
-  vlf: Option<Arc<ValueLog>>,
+  vlf: Arc<ValueLog>,
 
   /// Cache for value log files.
   #[cfg(feature = "std")]
@@ -48,7 +48,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     Ok(Self {
       fid_generator,
       lfs: map,
-      vlf: None,
+      vlf: Arc::new(ValueLog::placeholder(Fid::MAX)),
       #[cfg(feature = "std")]
       vcache: None,
       manifest,
@@ -162,12 +162,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         let vp_buf = &buf[..encoded_size];
 
         // write new fid to manifest file
-        self
-          .manifest
-          .lock_me()
+        let mut manifest_file = self.manifest.lock_me();
+
+        manifest_file
           .append(aol::Entry::creation_with_custom_flags(
             CustomFlags::empty().with_bit1(),
-            ManifestRecord::log(self.vlf.fid(), tid),
+            ManifestRecord::log(new_fid, tid),
           ))
           .map_err(|e| {
             if let Err(_e) = vlog.remove() {
@@ -178,15 +178,39 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
             e.into()
           })
           .and_then(|_| {
-            self.vlf = Some(Arc::new(vlog));
-            self.insert_to_log(tid, meta, key, vp_buf).map_err(|e| {
-              // rewind the value log file
-              if let Err(_e) = self.vlf.rewind(0) {
+            self.vlf = Arc::new(vlog);
+
+            let rewind = |res: Error| {
+              if let Err(e) = self.vlf.rewind(0) {
                 #[cfg(feature = "tracing")]
-                tracing::error!(err=%_e, "failed to rewind value log file");
+                tracing::error!(err=%e, "failed to rewind value log file");
               }
-              e
-            })
+
+              res
+            };
+
+            {
+              let active_lf = self.lfs.back().expect("no active log file");
+              match active_lf.value().insert(meta, key, vp_buf) {
+                Ok(_) => return Ok(()),
+                Err(LogFileError::Log(skl::map::Error::Arena(
+                  skl::ArenaError::InsufficientSpace { .. },
+                ))) => {}
+                Err(e) => return Err(rewind(e.into())),
+              }
+            }
+
+            let new_fid = self.fid_generator.increment();
+            let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))
+              .map_err(|e| rewind(e.into()))?;
+            manifest_file
+              .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))
+              .map_err(|e| rewind(e.into()))?;
+            new_lf
+              .insert(meta, key, vp_buf)
+              .map_err(|e| rewind(e.into()))?;
+            self.lfs.insert(new_fid, new_lf);
+            Ok(())
           })
       }
       Err(e) => Err(e.into()),
@@ -225,9 +249,9 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     let vp_buf = &buf[..encoded_size];
 
     // write new fid to manifest file
-    self
-      .manifest
-      .lock_me()
+    let mut manifest_file = self.manifest.lock_me();
+
+    manifest_file
       .append(aol::Entry::creation_with_custom_flags(
         CustomFlags::empty().with_bit1(),
         ManifestRecord::log(new_fid, tid),
@@ -241,13 +265,37 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         e.into()
       })
       .and_then(|_| {
-        self.insert_to_log(tid, meta, key, vp_buf).map_err(|e| {
+        let remove = |res: Error| {
           if let Err(_e) = vlog.remove() {
             #[cfg(feature = "tracing")]
             tracing::error!(err=%_e, "failed to remove unregistered value log file");
           }
-          e
-        })
+
+          res
+        };
+
+        {
+          let active_lf = self.lfs.back().expect("no active log file");
+          match active_lf.value().insert(meta, key, vp_buf) {
+            Ok(_) => return Ok(()),
+            Err(LogFileError::Log(skl::map::Error::Arena(
+              skl::ArenaError::InsufficientSpace { .. },
+            ))) => {}
+            Err(e) => return Err(remove(e.into())),
+          }
+        }
+
+        let new_fid = self.fid_generator.increment();
+        let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))
+          .map_err(|e| remove(e.into()))?;
+        manifest_file
+          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))
+          .map_err(|e| remove(e.into()))?;
+        new_lf
+          .insert(meta, key, vp_buf)
+          .map_err(|e| remove(e.into()))?;
+        self.lfs.insert(new_fid, new_lf);
+        Ok(())
       })
   }
 }
