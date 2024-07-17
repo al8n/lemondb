@@ -160,6 +160,12 @@ pub enum Error {
   /// Table already exists.
   #[cfg_attr(feature = "std", error("table {0} already exists"))]
   TableAlreadyExists(SmolStr),
+  /// Table already be opened.
+  #[cfg_attr(
+    feature = "std",
+    error("table {0} already in open status, you can use `get` method to get the table")
+  )]
+  TableAlreadyOpened(SmolStr),
   /// An I/O error occurred.
   #[cfg(feature = "std")]
   #[cfg_attr(feature = "std", error(transparent))]

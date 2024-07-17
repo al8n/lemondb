@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use aol::CustomFlags;
 use crossbeam_skiplist::SkipMap;
 use error::ValueLogError;
 use lf::LogFile;

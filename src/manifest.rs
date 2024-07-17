@@ -1,5 +1,7 @@
 use core::mem;
 
+use std::collections::btree_set::BTreeSet;
+
 #[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
 
@@ -349,20 +351,23 @@ impl ManifestEntry {
   }
 }
 
+#[viewit::viewit(getters(skip), setters(skip))]
 #[derive(Debug)]
 pub(crate) struct TableManifest {
   name: SmolStr,
+  id: TableId,
   removed: bool,
-  vlogs: HashSet<Fid>,
+  vlogs: BTreeSet<Fid>,
   logs: HashSet<Fid>,
 }
 
 impl TableManifest {
   #[inline]
-  fn new(name: SmolStr) -> Self {
+  fn new(id: TableId, name: SmolStr) -> Self {
     Self {
       name,
-      vlogs: HashSet::new(),
+      id,
+      vlogs: BTreeSet::new(),
       logs: HashSet::new(),
       removed: false,
     }
@@ -470,7 +475,7 @@ impl Manifest {
       ManifestRecord::Table { id, name } => {
         if flag.is_creation() {
           self.last_table_id = self.last_table_id.max(id);
-          self.tables.insert(id, TableManifest::new(name));
+          self.tables.insert(id, TableManifest::new(id, name));
           Ok(())
         } else if self.tables.remove(&id).is_some() {
           Ok(())

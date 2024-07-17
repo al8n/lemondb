@@ -4,6 +4,7 @@ use super::*;
 use std::sync::Mutex;
 
 use aol::CustomFlags;
+use manifest::TableManifest;
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 
@@ -27,6 +28,7 @@ pub(crate) struct Wal<C = Ascend> {
 }
 
 impl<C: Comparator + Send + Sync + 'static> Wal<C> {
+  // TODO: support mmap anon and memory create
   pub(crate) fn create(
     fid: Fid,
     fid_generator: Arc<AtomicFid>,
@@ -49,6 +51,37 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       fid_generator,
       lfs: map,
       vlf: Arc::new(ValueLog::placeholder(Fid::MAX)),
+      #[cfg(feature = "std")]
+      vcache: None,
+      manifest,
+      opts,
+      cmp,
+    })
+  }
+
+  pub(crate) fn open(
+    table_manifest: &TableManifest,
+    fid_generator: Arc<AtomicFid>,
+    manifest: Arc<Mutex<ManifestFile>>,
+    cmp: Arc<C>,
+    opts: WalOptions,
+  ) -> Result<Self, Error> {
+    let lfs = SkipMap::new();
+    for fid in table_manifest.logs.iter() {
+      let l = LogFile::open(cmp.clone(), opts.open_options(*fid))?;
+      lfs.insert(*fid, l);
+    }
+
+    let vlf = if let Some(fid) = table_manifest.vlogs.last() {
+      ValueLog::open(opts.open_options(*fid))?
+    } else {
+      ValueLog::placeholder(Fid::MAX)
+    };
+
+    Ok(Self {
+      fid_generator,
+      lfs,
+      vlf: Arc::new(vlf),
       #[cfg(feature = "std")]
       vcache: None,
       manifest,
@@ -226,16 +259,11 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   ) -> Result<(), Error> {
     meta.set_big_value_pointer();
 
-    let new_fid = self.fid_generator.increment();
-    let vlog = ValueLog::create(
-      CreateOptions::new(new_fid).with_size(self.vlf.encoded_entry_size(
-        meta.version(),
-        key,
-        val,
-        meta.checksum(),
-      ) as u64),
-    )?;
+    let encoded_entry_size =
+      ValueLog::encoded_entry_size(meta.version(), key, val, meta.checksum());
 
+    let new_fid = self.fid_generator.increment();
+    let vlog = ValueLog::create(CreateOptions::new(new_fid).with_size(encoded_entry_size as u64))?;
     let vp = vlog
       .write(meta.version(), key, val, meta.checksum())
       .map_err(|e| {
@@ -250,7 +278,6 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
     // write new fid to manifest file
     let mut manifest_file = self.manifest.lock_me();
-
     manifest_file
       .append(aol::Entry::creation_with_custom_flags(
         CustomFlags::empty().with_bit1(),

@@ -1,5 +1,5 @@
-use core::{cell::RefCell, mem, ptr};
-use std::{fmt::Write, fs::File, io::Write as _};
+use core::ptr;
+use std::{fmt::Write, fs::File};
 
 use fs4::FileExt;
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -153,14 +153,6 @@ impl MmapValueLog {
       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
       _ => Err(ValueLogError::Closed),
     }
-  }
-
-  #[inline]
-  pub(crate) fn encoded_entry_size(&self, version: u64, key: &[u8], val: &[u8], cks: u32) -> usize {
-    let kl = key.len();
-    let vl = val.len();
-    let h = Header::new(version, kl, vl, cks);
-    h.encoded_len() + kl + vl
   }
 
   /// Returns a byte slice which contains header, key and value.

@@ -184,7 +184,7 @@ impl ValueLog {
       ValueLogKind::Mmap(vlf) => vlf.write(version, key, value, checksum),
       ValueLogKind::MmapAnon(vlf) => vlf.write(version, key, value, checksum),
       ValueLogKind::Placeholder(_) => Err(ValueLogError::NotEnoughSpace {
-        required: self.encoded_entry_size(version, key, value, checksum) as u64,
+        required: Self::encoded_entry_size(version, key, value, checksum) as u64,
         remaining: 0,
       }),
     }
@@ -204,7 +204,9 @@ impl ValueLog {
   }
 
   /// Returns the encoded entry size for the given key and value.
-  pub(crate) fn encoded_entry_size(&self, version: u64, key: &[u8], val: &[u8], cks: u32) -> usize {
+  ///
+  // **NOTE** when modify this method, also need to modify the write method in all kinds of value log
+  pub(crate) fn encoded_entry_size(version: u64, key: &[u8], val: &[u8], cks: u32) -> usize {
     let kl = key.len();
     let vl = val.len();
     let h = Header::new(version, kl, vl, cks);
