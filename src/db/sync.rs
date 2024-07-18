@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use crossbeam_channel::{Receiver, Sender};
+use either::Either;
 #[cfg(not(feature = "std"))]
 use hashbrown::HashMap;
 
@@ -139,11 +140,11 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
     name: SmolStr,
     id: TableId,
     wal: Wal<C>,
-    write_ch: Option<Sender<Event>>,
+    write_ch: Either<Sender<Event>, usize>,
   ) -> Result<Self, Error> {
     let wal = Arc::new(UnsafeCell::new(wal));
     match write_ch {
-      Some(tx) => Ok(Self {
+      Either::Left(tx) => Ok(Self {
         inner: Arc::new(TableInner {
           name: name.clone(),
           id,
@@ -152,8 +153,8 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
         }),
       }),
       // run table in standalone mode
-      None => {
-        let (tx, rx) = crossbeam_channel::bounded(100);
+      Either::Right(size) => {
+        let (tx, rx) = crossbeam_channel::bounded(size);
         let table = Self {
           inner: Arc::new(TableInner {
             name: name.clone(),
@@ -258,19 +259,22 @@ impl Db {
         )?;
 
         let t = if opts.standalone {
-          Table::bootstrap(name, table_manifest.id, wal, None)?
+          Table::bootstrap(
+            name,
+            table_manifest.id,
+            wal,
+            Either::Right(opts.write_buffer_size()),
+          )?
         } else {
           Table::bootstrap(
             name,
             table_manifest.id,
             wal,
-            Some(self.main_write_tx.clone()),
+            Either::Left(self.main_write_tx.clone()),
           )?
         };
 
         tables.insert(table_manifest.id, t.clone());
-
-        // TODO: bootstrap table logic
 
         Ok(t)
       }
@@ -301,9 +305,14 @@ impl Db {
         ])?; // TODO: cleanup error construct
 
         let t = if opts.standalone {
-          Table::bootstrap(name, table_id, wal, None)?
+          Table::bootstrap(name, table_id, wal, Either::Right(opts.write_buffer_size()))?
         } else {
-          Table::bootstrap(name, table_id, wal, Some(self.main_write_tx.clone()))?
+          Table::bootstrap(
+            name,
+            table_id,
+            wal,
+            Either::Left(self.main_write_tx.clone()),
+          )?
         };
         let mut tables = self.tables.lock_me();
         tables.insert(table_id, t.clone());

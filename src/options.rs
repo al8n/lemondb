@@ -2,6 +2,7 @@ use crate::Fid;
 
 const MB: usize = 1 << 20;
 const GB: usize = 1 << 30;
+const DEFAULT_WRITE_BUFFER_SIZE: usize = 1024;
 
 /// The options for creating a log.
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
@@ -377,6 +378,15 @@ pub struct TableOptions {
   )]
   big_value_threshold: u64,
 
+  /// The write buffer size. Default is `1024`.
+  ///
+  /// The write buffer is used to buffer the write operations before they are written to the database.
+  #[viewit(
+    getter(const, attrs(doc = "Returns the write buffer size.")),
+    setter(attrs(doc = "Sets the write buffer size."))
+  )]
+  write_buffer_size: usize,
+
   /// Whether to lock the log. Default is `true`.
   ///
   /// If `true`, the log will be locked exlusively when it is created.
@@ -413,6 +423,7 @@ impl TableOptions {
       create: false,
       create_new: false,
       standalone: false,
+      write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
       log_size: wal.log_size,
       vlog_size: wal.vlog_size,
       value_threshold: wal.value_threshold,
@@ -443,6 +454,7 @@ impl From<WalOptions> for TableOptions {
       create: false,
       create_new: false,
       standalone: false,
+      write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
       log_size: val.log_size,
       vlog_size: val.vlog_size,
       value_threshold: val.value_threshold,
