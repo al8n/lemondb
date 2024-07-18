@@ -1,6 +1,9 @@
 use super::{error::LogFileError, options::*, util::validate_checksum, *};
 
-use core::ops::{Bound, RangeBounds};
+use core::{
+  ops::{Bound, RangeBounds},
+  sync::atomic::Ordering,
+};
 use std::io;
 
 use bytes::Bytes;
@@ -275,6 +278,15 @@ impl<C: Comparator> LogFile<C> {
     }
 
     Ok(())
+  }
+
+  #[inline]
+  pub(crate) fn remove(&self, meta: Meta, key: &[u8]) -> Result<(), LogFileError> {
+    self
+      .map
+      .compare_remove(meta, key, Ordering::AcqRel, Ordering::Relaxed)
+      .map(|_| ())
+      .map_err(Into::into)
   }
 
   /// Gets the value associated with the given key.

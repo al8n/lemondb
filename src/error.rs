@@ -166,6 +166,9 @@ pub enum Error {
     error("table {0} already in open status, you can use `get` method to get the table")
   )]
   TableAlreadyOpened(SmolStr),
+  /// Table is closed.
+  #[cfg_attr(feature = "std", error("table {0} is closed"))]
+  TableClosed(SmolStr),
   /// An I/O error occurred.
   #[cfg(feature = "std")]
   #[cfg_attr(feature = "std", error(transparent))]

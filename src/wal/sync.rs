@@ -90,6 +90,33 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     })
   }
 
+  pub(crate) fn remove(&mut self, tid: TableId, version: u64, key: &[u8]) -> Result<(), Error> {
+    let mut meta = Meta::new(version);
+    let cks = checksum(meta.raw(), key, None);
+    meta.set_checksum(cks);
+
+    {
+      let active_lf = self.lfs.back().expect("no active log file");
+      match active_lf.value().remove(meta, key) {
+        Ok(_) => return Ok(()),
+        Err(LogFileError::Log(skl::map::Error::Arena(skl::ArenaError::InsufficientSpace {
+          ..
+        }))) => {}
+        Err(e) => return Err(e.into()),
+      }
+    }
+
+    let new_fid = self.fid_generator.increment();
+    let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))?;
+    self
+      .manifest
+      .lock_me()
+      .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
+    new_lf.remove(meta, key)?;
+    self.lfs.insert(new_fid, new_lf);
+    Ok(())
+  }
+
   pub(crate) fn insert(
     &mut self,
     tid: TableId,
