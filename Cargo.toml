@@ -54,7 +54,7 @@ indexmap = { version = "2", default-features = false }
 memmap2 = { version = "0.9", optional = true }
 parking_lot = { version = "0.12", optional = true }
 quick_cache = { version = "0.6", optional = true }
-skl = { version = "0.13", default-features = false }
+skl = { version = "0.14", path = "../skl-rs", default-features = false }
 smallvec-wrapper = { version = "0.1", default-features = false, features = ["const_new"] }
 smol_str = { version = "0.2", default-features = false }
 thiserror = { version = "1", optional = true }

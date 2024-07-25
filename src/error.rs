@@ -169,6 +169,15 @@ pub enum Error {
   /// Table is closed.
   #[cfg_attr(feature = "std", error("table {0} is closed"))]
   TableClosed(SmolStr),
+  /// Table is removed.
+  #[cfg_attr(feature = "std", error("table {0} is removed"))]
+  TableRemoved(SmolStr),
+  /// Database is closed.
+  #[cfg_attr(feature = "std", error("database is closed"))]
+  DatabaseClosed,
+  /// Database is read only.
+  #[cfg_attr(feature = "std", error("database is read only"))]
+  ReadOnly,
   /// An I/O error occurred.
   #[cfg(feature = "std")]
   #[cfg_attr(feature = "std", error(transparent))]

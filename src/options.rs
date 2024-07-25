@@ -3,6 +3,7 @@ use crate::Fid;
 const MB: usize = 1 << 20;
 const GB: usize = 1 << 30;
 const DEFAULT_WRITE_BUFFER_SIZE: usize = 1024;
+const DEFAULT_IGNORE_WRITES_AFTER_CLOSE: bool = false;
 
 /// The options for creating a log.
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
@@ -341,6 +342,34 @@ pub struct TableOptions {
   )]
   standalone: bool,
 
+  /// Whether to ignore onflight writes after close. Default is `false`.
+  ///
+  /// If `true`, when the table or database is closed,
+  /// the writer will ignore all onflight writes and the caller
+  /// which is waiting for the write result will just receive an error.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "
+    Returns whether to ignore onflight writes after close. Default is `false`.
+
+    If `true`, when the table or database is closed, 
+    the writer will ignore all onflight writes and the caller
+    which is waiting for the write result will just receive an error.
+
+    ")
+    ),
+    setter(attrs(doc = "
+    Sets whether to ignore onflight writes after close.
+    
+    If `true`, when the table or database is closed, 
+    the writer will ignore all onflight writes and the caller
+    which is waiting for the write result will just receive an error.
+ 
+    "))
+  )]
+  ignore_writes_after_close: bool,
+
   /// The default size of the write-ahead log size. Default is 2GB.
   #[viewit(
     getter(const, attrs(doc = "Returns the size of the write-ahead log.")),
@@ -424,6 +453,7 @@ impl TableOptions {
       create_new: false,
       standalone: false,
       write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
+      ignore_writes_after_close: DEFAULT_IGNORE_WRITES_AFTER_CLOSE,
       log_size: wal.log_size,
       vlog_size: wal.vlog_size,
       value_threshold: wal.value_threshold,
@@ -455,6 +485,7 @@ impl From<WalOptions> for TableOptions {
       create_new: false,
       standalone: false,
       write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
+      ignore_writes_after_close: DEFAULT_IGNORE_WRITES_AFTER_CLOSE,
       log_size: val.log_size,
       vlog_size: val.vlog_size,
       value_threshold: val.value_threshold,
@@ -532,6 +563,19 @@ pub struct Options {
     setter(attrs(doc = "Sets whether to open in-memory log."))
   )]
   in_memory: bool,
+
+  /// Whether the database is read-only or not. Default is `false`.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "
+    Returns if the database is 
+    read-only.
+    ")
+    ),
+    setter(attrs(doc = "Sets whether the database is read-only."))
+  )]
+  read_only: bool,
 }
 
 impl Default for Options {
@@ -550,6 +594,7 @@ impl Options {
       vlog_size: 2 * GB as u64,
       value_threshold: MB as u64,
       big_value_threshold: GB as u64,
+      read_only: false,
       lock: true,
       sync_on_write: true,
       in_memory: false,
