@@ -90,6 +90,50 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     })
   }
 
+  pub(crate) fn get<'a, 'b: 'a>(
+    &'a self,
+    version: u64,
+    key: &'b [u8],
+  ) -> Result<Option<Entry>, Error> {
+    for file in self.lfs.iter().rev() {
+      let lf = file.value();
+
+      if !lf.contains_version(version) {
+        continue;
+      }
+
+      match lf.get(version, key) {
+        Ok(Some(ent)) => {
+          if ent.is_removed() {
+            return Ok(None);
+          }
+
+          return Ok(Some(Entry::new(EntryRef::new(ent).to_owned())));
+        }
+        Ok(None) => continue,
+        Err(e) => return Err(e.into()),
+      }
+    }
+
+    Ok(None)
+  }
+
+  pub(crate) fn contains<'a, 'b: 'a>(&'a self, version: u64, key: &'b [u8]) -> Result<bool, Error> {
+    for file in self.lfs.iter().rev() {
+      let lf = file.value();
+
+      if !lf.contains_version(version) {
+        continue;
+      }
+
+      if lf.contains_key(version, key)? {
+        return Ok(true);
+      }
+    }
+
+    Ok(false)
+  }
+
   pub(crate) fn remove(&mut self, tid: TableId, version: u64, key: &[u8]) -> Result<(), Error> {
     let mut meta = Meta::new(version);
     let cks = checksum(meta.raw(), key, None);

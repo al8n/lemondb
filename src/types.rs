@@ -354,41 +354,68 @@ impl<'a> EntryRef<'a> {
   pub(crate) const fn new(ent: MapEntryRef<'a, Meta>) -> Self {
     Self { ent }
   }
+
+  #[inline]
+  pub(crate) fn to_owned(&self) -> skl::map::Entry<Meta> {
+    self.ent.to_owned()
+  }
 }
 
 /// An entry in the log.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Entry {
-  key: Bytes,
-  value: Bytes,
-  meta: Meta,
-}
+#[derive(Debug, Clone)]
+pub struct Entry(skl::map::Entry<Meta>);
 
 impl Entry {
   /// Create a new entry with the given key, value, and metadata.
   #[inline]
-  pub(crate) const fn new(key: Bytes, value: Bytes, meta: Meta) -> Self {
-    Self { key, value, meta }
+  pub(crate) const fn new(ent: skl::map::Entry<Meta>) -> Self {
+    Self(ent)
   }
 
   /// Returns the key of the entry.
   #[inline]
-  pub const fn key(&self) -> &Bytes {
-    &self.key
+  pub fn key(&self) -> &[u8] {
+    self.0.key()
   }
 
   /// Returns the value of the entry.
   #[inline]
-  pub const fn value(&self) -> &Bytes {
-    &self.value
+  pub fn value(&self) -> &[u8] {
+    self.0.value()
   }
 
   /// Returns the metadata of the entry.
   #[inline]
-  pub const fn meta(&self) -> Meta {
-    self.meta
+  pub fn version(&self) -> u64 {
+    self.0.trailer().version()
   }
 }
+
+// impl Entry {
+//   /// Create a new entry with the given key, value, and metadata.
+//   #[inline]
+//   pub(crate) const fn new(key: Bytes, value: Bytes, meta: Meta) -> Self {
+//     Self { key, value, meta }
+//   }
+
+//   /// Returns the key of the entry.
+//   #[inline]
+//   pub const fn key(&self) -> &Bytes {
+//     &self.key
+//   }
+
+//   /// Returns the value of the entry.
+//   #[inline]
+//   pub const fn value(&self) -> &Bytes {
+//     &self.value
+//   }
+
+//   /// Returns the metadata of the entry.
+//   #[inline]
+//   pub const fn meta(&self) -> Meta {
+//     self.meta
+//   }
+// }
 
 /// Value pointer encode/decode error.
 #[derive(Debug, Copy, Clone)]

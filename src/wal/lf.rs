@@ -80,28 +80,35 @@ impl<C: Comparator> LogFile<C> {
   pub fn create(cmp: Arc<C>, opts: CreateOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
-    if opts.in_memory {
-      return SkipMap::<Meta, _>::with_options_and_comparator(
-        Options::new()
-          .with_capacity(opts.size as u32)
-          .with_magic_version(CURRENT_VERSION),
-        cmp,
-      )
-      .map(|map| {
-        map.allocator().shrink_on_drop(true);
+    if let Some(mode) = opts.in_memory {
+      let res = match mode {
+        MemoryMode::Memory => SkipMap::<Meta, _>::with_options_and_comparator(
+          Options::new()
+            .with_capacity(opts.size as u32)
+            .with_magic_version(CURRENT_VERSION),
+          cmp,
+        )
+        .map_err(Into::into),
+        MemoryMode::MmapAnonymous => SkipMap::<Meta, _>::map_anon_with_options_and_comparator(
+          Options::new()
+            .with_capacity(opts.size as u32)
+            .with_magic_version(CURRENT_VERSION),
+          skl::MmapOptions::new().len(opts.size as u32),
+          cmp,
+        )
+        .map_err(Into::into),
+      };
 
-        Self {
-          map,
-          fid: opts.fid,
-          sync_on_write: opts.sync_on_write,
-          ro: false,
-          minimum: None,
-          maximum: None,
-          max_version: None,
-          min_version: None,
-        }
-      })
-      .map_err(Into::into);
+      return res.map(|map| Self {
+        map,
+        fid: opts.fid,
+        sync_on_write: opts.sync_on_write,
+        ro: false,
+        minimum: None,
+        maximum: None,
+        max_version: None,
+        min_version: None,
+      });
     }
 
     LOG_FILENAME_BUFFER.with(|buf| {
@@ -259,26 +266,26 @@ impl<C: Comparator> LogFile<C> {
     }
   }
 
-  /// Inserts a batch of key-value pairs to the log.
-  ///
-  /// ## Warning
-  /// This method does not guarantee atomicity, which means that if the method fails in the middle of writing the batch,
-  /// some of the key-value pairs may be written to the log.
-  #[inline]
-  pub fn insert_many(&self, batch: &[Entry]) -> Result<(), LogFileError> {
-    for (idx, ent) in batch.iter().enumerate() {
-      self
-        .map
-        .insert(ent.meta(), ent.key(), ent.value())
-        .map_err(|e| LogFileError::WriteBatch { idx, source: e })?;
-    }
+  // /// Inserts a batch of key-value pairs to the log.
+  // ///
+  // /// ## Warning
+  // /// This method does not guarantee atomicity, which means that if the method fails in the middle of writing the batch,
+  // /// some of the key-value pairs may be written to the log.
+  // #[inline]
+  // pub fn insert_many(&self, batch: &[Entry]) -> Result<(), LogFileError> {
+  //   for (idx, ent) in batch.iter().enumerate() {
+  //     self
+  //       .map
+  //       .insert(ent.meta(), ent.key(), ent.value())
+  //       .map_err(|e| LogFileError::WriteBatch { idx, source: e })?;
+  //   }
 
-    if self.sync_on_write {
-      self.flush()?;
-    }
+  //   if self.sync_on_write {
+  //     self.flush()?;
+  //   }
 
-    Ok(())
-  }
+  //   Ok(())
+  // }
 
   #[inline]
   pub(crate) fn remove(&self, meta: Meta, key: &[u8]) -> Result<(), LogFileError> {
@@ -295,9 +302,9 @@ impl<C: Comparator> LogFile<C> {
     &'a self,
     version: u64,
     key: &'b [u8],
-  ) -> Result<Option<EntryRef<'a>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a>>, LogFileError> {
     // fast path
-    if version < self.min_version() {
+    if !self.contains_version(version) {
       return Ok(None);
     }
 
@@ -314,19 +321,25 @@ impl<C: Comparator> LogFile<C> {
     }
 
     // fallback to slow path
-    match self.map.get(version, key) {
+    match self.map.get_versioned(version, key) {
       Some(ent) => {
         let trailer = ent.trailer();
         validate_checksum(
           trailer.version(),
           ent.key(),
-          Some(ent.value()),
+          ent.value(),
           trailer.checksum(),
         )?;
-        Ok(Some(EntryRef::new(ent)))
+        Ok(Some(VersionedEntryRef::new(ent)))
       }
       None => Ok(None),
     }
+  }
+
+  /// Returns `true` if the given version is `min_version <= version <= max_version` of the log.
+  #[inline]
+  pub(crate) fn contains_version(&self, version: u64) -> bool {
+    self.min_version() <= version && version <= self.max_version()
   }
 
   /// Returns `true` if the log contains the given key.

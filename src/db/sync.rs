@@ -3,9 +3,9 @@ use super::*;
 use crate::{
   error::Error,
   manifest::{ManifestFile, ManifestRecord},
-  options::{Options, TableOptions, WalOptions},
+  options::{MemoryMode, Options, TableOptions, WalOptions},
   wal::Wal,
-  AtomicFid, Mu, TableId,
+  AtomicFid, Meta, Mu, TableId,
 };
 
 use core::{
@@ -213,6 +213,22 @@ impl<C> Clone for Table<C> {
 }
 
 impl<C: Comparator + Send + Sync + 'static> Table<C> {
+  /// Returns `true` if the table contains the specified key.
+  pub fn contains(&self, key: &[u8]) -> Result<bool, Error> {
+    self.check_status()?;
+    let wal = unsafe { &*self.inner.wal.get() };
+    wal.contains(0, key)
+  }
+
+  /// Get the value of the key.
+  pub fn get(&self, key: &[u8]) -> Result<Option<crate::types::Entry>, Error> {
+    self.check_status()?;
+
+    let wal = unsafe { &*self.inner.wal.get() };
+
+    wal.get(0, key)
+  }
+
   /// Insert a key-value pair into the table.
   #[inline]
   pub fn insert(&self, key: Bytes, value: Bytes) -> Result<(), Error> {
@@ -361,11 +377,23 @@ pub struct Db<C = Ascend> {
   main_write_rx: Receiver<Event>,
   cmp: Arc<C>,
   opts: Options,
+  in_memory: Option<MemoryMode>,
   shutdown_tx: Sender<()>,
   shutdown_rx: Receiver<()>,
 }
 
 impl Db {
+  /// Open a database with the given directory and options.
+  pub fn open<P>(dir: P, opts: Options) -> Result<Self, Error> {
+    if let Some(mode) = opts.in_memory {}
+    todo!()
+  }
+
+  /// Open a database in memory with the given options.
+  pub fn open_inmemory(memory_mode: MemoryMode, opts: Options) -> Result<Self, Error> {
+    todo!()
+  }
+
   /// Get a table with the given name. If this method returns `None`, then it means that the table either does not exist or has not been opened.
   ///
   /// See also [`open_table`](#method.open_table) and [`get_or_open_table`](#method.get_or_open_table).
@@ -417,7 +445,7 @@ impl Db {
           self.fid_generator.clone(),
           self.manifest.clone(),
           self.cmp.clone(),
-          opts.to_wal_options(self.opts.in_memory),
+          opts.to_wal_options(self.in_memory),
         )?;
 
         let t = if opts.standalone {
@@ -447,13 +475,13 @@ impl Db {
         Ok(t)
       }
       None => {
+        if self.opts.read_only {
+          return Err(Error::ReadOnly);
+        }
+
         // if we do not have create or create_new, return error
         if !(opts.create || opts.create_new) {
           return Err(Error::TableNotFound(name));
-        }
-
-        if self.opts.read_only {
-          return Err(Error::ReadOnly);
         }
 
         let table_id = file.next_table_id();
@@ -464,7 +492,7 @@ impl Db {
           self.fid_generator.clone(),
           self.manifest.clone(),
           self.cmp.clone(),
-          opts.to_wal_options(self.opts.in_memory),
+          opts.to_wal_options(self.in_memory),
         )?;
 
         // add table to manifest

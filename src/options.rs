@@ -51,19 +51,19 @@ pub(crate) struct CreateOptions {
     getter(const, attrs(doc = "Returns if we should open in-memory log.")),
     setter(attrs(doc = "Sets whether to open in-memory log."))
   )]
-  in_memory: bool,
+  in_memory: Option<MemoryMode>,
 }
 
 impl CreateOptions {
   /// Creates a new create options with the default values.
   #[inline]
-  pub const fn new(fid: Fid) -> Self {
+  pub(crate) const fn new(fid: Fid) -> Self {
     Self {
       fid,
       size: 2 * GB as u64,
       lock: true,
       sync_on_write: true,
-      in_memory: false,
+      in_memory: None,
     }
   }
 }
@@ -248,7 +248,7 @@ pub struct WalOptions {
     getter(const, attrs(doc = "Returns if we should open in-memory log.")),
     setter(attrs(doc = "Sets whether to open in-memory log."))
   )]
-  in_memory: bool,
+  in_memory: Option<MemoryMode>,
 }
 
 impl Default for WalOptions {
@@ -269,7 +269,7 @@ impl WalOptions {
       big_value_threshold: GB as u64,
       lock: true,
       sync_on_write: true,
-      in_memory: false,
+      in_memory: None,
     }
   }
 
@@ -464,7 +464,7 @@ impl TableOptions {
   }
 
   #[inline]
-  pub(crate) fn to_wal_options(&self, in_memory: bool) -> WalOptions {
+  pub(crate) fn to_wal_options(&self, in_memory: Option<MemoryMode>) -> WalOptions {
     WalOptions {
       log_size: self.log_size,
       vlog_size: self.vlog_size,
@@ -494,6 +494,15 @@ impl From<WalOptions> for TableOptions {
       lock: val.lock,
     }
   }
+}
+
+/// The in-memory database mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MemoryMode {
+  /// Full in-memory mode.
+  Memory,
+  /// Mmap anonymous mode.
+  MmapAnonymous,
 }
 
 /// The options for configuring the database.
@@ -562,7 +571,7 @@ pub struct Options {
     getter(const, attrs(doc = "Returns if we should open in-memory log.")),
     setter(attrs(doc = "Sets whether to open in-memory log."))
   )]
-  in_memory: bool,
+  in_memory: Option<MemoryMode>,
 
   /// Whether the database is read-only or not. Default is `false`.
   #[viewit(
@@ -597,7 +606,7 @@ impl Options {
       read_only: false,
       lock: true,
       sync_on_write: true,
-      in_memory: false,
+      in_memory: None,
     }
   }
 
