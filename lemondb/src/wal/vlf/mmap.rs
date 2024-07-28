@@ -1,7 +1,7 @@
 use core::ptr;
 use std::{fmt::Write, fs::File};
 
-use fs4::FileExt;
+use fs4::fs_std::FileExt;
 use memmap2::{Mmap, MmapMut, MmapOptions};
 
 use super::*;
@@ -20,22 +20,22 @@ enum Memmap {
   },
 }
 
-impl Memmap {
-  fn truncate(&mut self, len: u64) -> Result<(), ValueLogError> {
-    match self {
-      Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
-      Memmap::MapMut { backed, mmap, .. } => {
-        backed.set_len(len)?;
+// impl Memmap {
+//   fn truncate(&mut self, len: u64) -> Result<(), ValueLogError> {
+//     match self {
+//       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
+//       Memmap::MapMut { backed, mmap, .. } => {
+//         backed.set_len(len)?;
 
-        unsafe { ptr::drop_in_place(mmap) };
+//         unsafe { ptr::drop_in_place(mmap) };
 
-        *mmap = unsafe { MmapOptions::new().map_mut(&*backed)? };
-        Ok(())
-      }
-      _ => Err(ValueLogError::Closed),
-    }
-  }
-}
+//         *mmap = unsafe { MmapOptions::new().map_mut(&*backed)? };
+//         Ok(())
+//       }
+//       _ => Err(ValueLogError::Closed),
+//     }
+//   }
+// }
 
 pub struct MmapValueLog {
   fid: Fid,

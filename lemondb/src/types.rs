@@ -1,7 +1,9 @@
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use bytes::Bytes;
-use skl::{map::EntryRef as MapEntryRef, map::VersionedEntryRef as MapVersionedEntryRef, Trailer};
+use crossbeam_skiplist::map::Entry as CMapEntry;
+use skl::{map::EntryRef as MapEntryRef, map::Entry as MapEntry, map::VersionedEntryRef as MapVersionedEntryRef, Trailer};
+
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
 
@@ -269,6 +271,12 @@ impl Meta {
     self.meta & Self::VALUE_POINTER_FLAG != 0
   }
 
+  /// Returns `true` if the value of the entry is a pointer.
+  #[inline]
+  pub const fn is_pointer(&self) -> bool {
+    self.is_value_pointer() || self.is_big_value_pointer()
+  }
+
   /// Returns the metadata as a raw 64-bit value.
   #[inline]
   pub(crate) const fn raw(&self) -> u64 {
@@ -319,47 +327,7 @@ impl<'a> VersionedEntryRef<'a> {
   }
 }
 
-/// A reference to an entry in the log.
-#[derive(Debug, Copy, Clone)]
-pub struct EntryRef<'a> {
-  ent: MapEntryRef<'a, Meta>,
-}
 
-impl<'a> EntryRef<'a> {
-  /// Returns the key of the entry.
-  #[inline]
-  pub const fn key(&self) -> &[u8] {
-    self.ent.key()
-  }
-
-  /// Returns the value of the entry.
-  #[inline]
-  pub const fn value(&self) -> &[u8] {
-    self.ent.value()
-  }
-
-  /// Returns `true` if the value of the entry is a value pointer.
-  #[inline]
-  pub const fn is_value_pointer(&self) -> bool {
-    self.ent.trailer().is_value_pointer()
-  }
-
-  /// Returns `true` if the value of the entry is a value pointer.
-  #[inline]
-  pub const fn is_big_value_pointer(&self) -> bool {
-    self.ent.trailer().is_big_value_pointer()
-  }
-
-  #[inline]
-  pub(crate) const fn new(ent: MapEntryRef<'a, Meta>) -> Self {
-    Self { ent }
-  }
-
-  #[inline]
-  pub(crate) fn to_owned(&self) -> skl::map::Entry<Meta> {
-    self.ent.to_owned()
-  }
-}
 
 /// An entry in the log.
 #[derive(Debug, Clone)]

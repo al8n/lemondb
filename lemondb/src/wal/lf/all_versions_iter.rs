@@ -1,19 +1,19 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub struct LogFileIter<'a, C, Q: ?Sized = &'static [u8], R = core::ops::RangeFull> {
-  pub(super) iter: skl::map::Iter<'a, Meta, Arc<C>, Q, R>,
+pub struct LogFileAllVersionsIter<'a, C, Q: ?Sized = &'static [u8], R = core::ops::RangeFull> {
+  pub(super) iter: skl::map::AllVersionsIter<'a, Meta, Arc<C>, Q, R>,
   // Indicates if it is possible to yield items.
   pub(super) yield_: bool,
 }
 
-impl<'a, C: Comparator, Q, R> Iterator for LogFileIter<'a, C, Q, R>
+impl<'a, C: Comparator, Q, R> Iterator for LogFileAllVersionsIter<'a, C, Q, R>
 where
   &'a [u8]: PartialOrd<Q>,
   Q: ?Sized + PartialOrd<&'a [u8]>,
   R: RangeBounds<Q>,
 {
-  type Item = Result<EntryRef<'a>, LogFileError>;
+  type Item = Result<VersionedEntryRef<'a, Meta>, LogFileError>;
 
   fn next(&mut self) -> Option<Self::Item> {
     if !self.yield_ {
@@ -21,19 +21,20 @@ where
     }
 
     self.iter.next().map(|ent| {
+      let trailer = ent.trailer();
       validate_checksum(
-        ent.version(),
+        trailer.version(),
         ent.key(),
-        Some(ent.value()),
-        ent.trailer().checksum(),
+        ent.value(),
+        trailer.checksum(),
       )
-      .map(|_| EntryRef::new(ent))
+      .map(|_| ent)
       .map_err(Into::into)
     })
   }
 }
 
-impl<'a, C: Comparator, Q, R> DoubleEndedIterator for LogFileIter<'a, C, Q, R>
+impl<'a, C: Comparator, Q, R> DoubleEndedIterator for LogFileAllVersionsIter<'a, C, Q, R>
 where
   &'a [u8]: PartialOrd<Q>,
   Q: ?Sized + PartialOrd<&'a [u8]>,
@@ -49,24 +50,24 @@ where
       validate_checksum(
         trailer.version(),
         ent.key(),
-        Some(ent.value()),
+        ent.value(),
         trailer.checksum(),
       )
-      .map(|_| EntryRef::new(ent))
+      .map(|_| ent)
       .map_err(Into::into)
     })
   }
 }
 
-impl<'a, C, Q, R> LogFileIter<'a, C, Q, R> {
+impl<'a, C, Q, R> LogFileAllVersionsIter<'a, C, Q, R> {
   /// Returns the entry at the current position of the iterator.
   #[inline]
-  pub fn entry(&self) -> Option<EntryRef<'a>> {
+  pub fn entry(&self) -> Option<VersionedEntryRef<'a, Meta>> {
     if !self.yield_ {
       return None;
     }
 
-    self.iter.entry().map(EntryRef::new)
+    self.iter.entry().cloned()
   }
 
   /// Returns the bounds of the iterator.
@@ -76,7 +77,7 @@ impl<'a, C, Q, R> LogFileIter<'a, C, Q, R> {
   }
 }
 
-impl<'a, C: Comparator, Q, R> LogFileIter<'a, C, Q, R>
+impl<'a, C: Comparator, Q, R> LogFileAllVersionsIter<'a, C, Q, R>
 where
   &'a [u8]: PartialOrd<Q>,
   Q: ?Sized + PartialOrd<&'a [u8]>,
@@ -87,7 +88,7 @@ where
   pub fn seek_upper_bound(
     &mut self,
     upper: Bound<&[u8]>,
-  ) -> Result<Option<EntryRef<'a>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a, Meta>>, LogFileError> {
     if !self.yield_ {
       return Ok(None);
     }
@@ -95,14 +96,13 @@ where
     match self.iter.seek_upper_bound(upper) {
       Some(ent) => {
         let trailer = ent.trailer();
-
         return validate_checksum(
           trailer.version(),
           ent.key(),
-          Some(ent.value()),
+          ent.value(),
           trailer.checksum(),
         )
-        .map(|_| Some(EntryRef::new(ent)))
+        .map(|_| Some(ent))
         .map_err(Into::into);
       }
       None => Ok(None),
@@ -114,7 +114,7 @@ where
   pub fn seek_lower_bound(
     &mut self,
     lower: Bound<&[u8]>,
-  ) -> Result<Option<EntryRef<'a>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a, Meta>>, LogFileError> {
     if !self.yield_ {
       return Ok(None);
     }
@@ -125,10 +125,10 @@ where
         return validate_checksum(
           trailer.version(),
           ent.key(),
-          Some(ent.value()),
+          ent.value(),
           trailer.checksum(),
         )
-        .map(|_| Some(EntryRef::new(ent)))
+        .map(|_| Some(ent))
         .map_err(Into::into);
       }
       None => Ok(None),

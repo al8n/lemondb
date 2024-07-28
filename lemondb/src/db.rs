@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+pub use skl::{Ascend, Comparator, Descend};
+
 use super::*;
 
 use crate::{

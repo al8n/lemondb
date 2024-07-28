@@ -7,7 +7,7 @@ use core::{
 use std::io;
 
 use bytes::Bytes;
-use skl::{Options, SkipMap, Trailer};
+use skl::{Options, SkipMap, Trailer, map::{VersionedEntryRef, EntryRef}};
 
 pub use skl::{
   Ascend, Comparator, Descend, MmapOptions, OpenOptions as SklOpenOptions, VacantBuffer,
@@ -228,13 +228,13 @@ impl<C: Comparator> LogFile<C> {
     meta: Meta,
     key: &'b [u8],
     value: &'b [u8],
-  ) -> Result<Option<EntryRef<'a>>, LogFileError> {
+  ) -> Result<Option<EntryRef<'a, Meta>>, LogFileError> {
     match self.map.insert(meta, key, value) {
       Ok(ent) => {
         if self.sync_on_write {
           self.flush()?;
         }
-        Ok(ent.map(EntryRef::new))
+        Ok(ent)
       }
       Err(e) => Err(LogFileError::Log(e)),
     }
@@ -254,13 +254,13 @@ impl<C: Comparator> LogFile<C> {
     key: &'b [u8],
     value_size: u32,
     f: impl Fn(&mut VacantBuffer<'a>) -> Result<(), E>,
-  ) -> Result<Option<EntryRef<'a>>, Either<E, LogFileError>> {
+  ) -> Result<Option<EntryRef<'a, Meta>>, Either<E, LogFileError>> {
     match self.map.insert_with_value(meta, key, value_size, f) {
       Ok(ent) => {
         if self.sync_on_write {
           self.flush().map_err(|e| Either::Right(e.into()))?;
         }
-        Ok(ent.map(EntryRef::new))
+        Ok(ent)
       }
       Err(e) => Err(e.map_right(LogFileError::Log)),
     }
@@ -302,7 +302,7 @@ impl<C: Comparator> LogFile<C> {
     &'a self,
     version: u64,
     key: &'b [u8],
-  ) -> Result<Option<VersionedEntryRef<'a>>, LogFileError> {
+  ) -> Result<Option<VersionedEntryRef<'a, Meta>>, LogFileError> {
     // fast path
     if !self.contains_version(version) {
       return Ok(None);
@@ -330,7 +330,7 @@ impl<C: Comparator> LogFile<C> {
           ent.value(),
           trailer.checksum(),
         )?;
-        Ok(Some(VersionedEntryRef::new(ent)))
+        Ok(Some(ent))
       }
       None => Ok(None),
     }
@@ -350,7 +350,7 @@ impl<C: Comparator> LogFile<C> {
 
   /// Returns the first (minimum) key in the log.
   #[inline]
-  pub fn first(&self, version: u64) -> Result<Option<EntryRef>, LogFileError> {
+  pub fn first(&self, version: u64) -> Result<Option<EntryRef<Meta>>, LogFileError> {
     match self.map.first(version) {
       Some(ent) => {
         let trailer = ent.trailer();
@@ -360,7 +360,7 @@ impl<C: Comparator> LogFile<C> {
           Some(ent.value()),
           trailer.checksum(),
         )?;
-        Ok(Some(EntryRef::new(ent)))
+        Ok(Some(ent))
       }
       None => Ok(None),
     }
@@ -368,7 +368,7 @@ impl<C: Comparator> LogFile<C> {
 
   /// Returns the last (maximum) key in the log.
   #[inline]
-  pub fn last(&self, version: u64) -> Result<Option<EntryRef>, LogFileError> {
+  pub fn last(&self, version: u64) -> Result<Option<EntryRef<Meta>>, LogFileError> {
     match self.map.last(version) {
       Some(ent) => {
         let trailer = ent.trailer();
@@ -378,7 +378,7 @@ impl<C: Comparator> LogFile<C> {
           Some(ent.value()),
           trailer.checksum(),
         )?;
-        Ok(Some(EntryRef::new(ent)))
+        Ok(Some(ent))
       }
       None => Ok(None),
     }

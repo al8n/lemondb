@@ -1,4 +1,31 @@
-use super::*;
+use std::sync::Arc;
+
+use crossbeam_skiplist::{SkipMap, map::Entry as CMapEntry};
+use either::Either;
+use error::ValueLogError;
+use lf::LogFile;
+use manifest::{ManifestFile, ManifestRecord};
+#[cfg(feature = "std")]
+use quick_cache::sync::Cache;
+
+use skl::{map::{Entry as MapEntry, EntryRef as MapEntryRef, VersionedEntry, VersionedEntryRef as MapVersionedEntryRef}, Ascend, Trailer};
+
+#[cfg(feature = "std")]
+use vlf::ValueLog;
+
+use crate::options::CreateOptions;
+
+use self::util::checksum;
+
+use super::{
+  error::{Error, LogFileError},
+  options::WalOptions,
+  *,
+};
+
+mod lf;
+#[cfg(feature = "std")]
+mod vlf;
 
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
@@ -7,6 +34,81 @@ use aol::CustomFlags;
 use manifest::TableManifest;
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
+
+enum EntryKind {
+  Inlined(VersionedEntry<Meta>),
+  Pointer {
+    ent: VersionedEntry<Meta>,
+    pointer: Pointer,
+    log: Arc<ValueLog>,
+  },
+}
+
+impl EntryKind {
+  #[inline]
+  const fn from_pointer(pointer: Pointer, ent: VersionedEntry<Meta>, log: Arc<ValueLog>) -> Self {
+    Self::Pointer { pointer, log, ent }
+  }
+
+  #[inline]
+  const fn from_inlined(val: VersionedEntry<Meta>) -> Self {
+    Self::Inlined(val)
+  }
+
+  #[inline]
+  fn trailer(&self) -> &Meta {
+    match self {
+      Self::Inlined(ent) => ent.trailer(),
+      Self::Pointer { ent, .. } => ent.trailer(),
+    }
+  }
+
+  #[inline]
+  fn key(&self) -> &[u8] {
+    match self {
+      Self::Inlined(ent) => ent.key(),
+      Self::Pointer { ent, .. } => ent.key(),
+    }
+  }
+
+  #[inline]
+  fn value(&self) -> &[u8] {
+    match self {
+      Self::Inlined(ent) => ent.value().unwrap(),
+      // TODO: optimize read
+      Self::Pointer { pointer, log, .. } => log.read(pointer.offset() as usize, pointer.size() as usize).unwrap(),
+    }
+  }
+}
+
+/// A reference to an entry in the log.
+pub struct EntryRef<'a, C> {
+  ent: EntryKind,
+  parent: CMapEntry<'a, Fid, LogFile<C>>,
+}
+
+impl<'a, C> core::fmt::Debug for EntryRef<'a, C> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    f.debug_struct("EntryRef")
+      .field("key", &self.ent.key())
+      .field("value", &self.ent.value())
+      .finish()
+  }
+}
+
+impl<'a, C> EntryRef<'a, C> {
+  /// Returns the key of the entry.
+  #[inline]
+  pub fn key(&self) -> &[u8] {
+    self.ent.key()
+  }
+
+  /// Returns the value of the entry.
+  #[inline]
+  pub fn value(&self) -> &[u8] {
+    self.ent.value()
+  }
+}
 
 pub(crate) struct Wal<C = Ascend> {
   fid_generator: Arc<AtomicFid>,
@@ -19,7 +121,7 @@ pub(crate) struct Wal<C = Ascend> {
 
   /// Cache for value log files.
   #[cfg(feature = "std")]
-  vcache: Option<Arc<Cache<u32, Arc<ValueLog>>>>,
+  vcache: Option<Arc<Cache<Fid, Arc<ValueLog>>>>,
 
   manifest: Arc<Mutex<ManifestFile>>,
   opts: WalOptions,
@@ -94,7 +196,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     &'a self,
     version: u64,
     key: &'b [u8],
-  ) -> Result<Option<Entry>, Error> {
+  ) -> Result<Option<EntryRef<'a, C>>, Error> {
     for file in self.lfs.iter().rev() {
       let lf = file.value();
 
@@ -108,7 +210,30 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
             return Ok(None);
           }
 
-          return Ok(Some(Entry::new(EntryRef::new(ent).to_owned())));
+          let ent = if ent.trailer().is_pointer() {
+            let vp_buf = ent.value().unwrap();
+            let (_, vp) = Pointer::decode(vp_buf)?;
+            
+            if let Some(cache) = self.vcache.as_ref() {
+              if let Some(vlog) = cache.get(&vp.fid()) {
+                EntryKind::from_pointer(vp, ent.to_owned(), vlog)
+              } else {
+                let vlog = Arc::new(ValueLog::open(self.opts.open_options(vp.fid()))?);
+                cache.insert(vp.fid(), vlog.clone());
+                EntryKind::from_pointer(vp, ent.to_owned(), vlog)
+              }
+            } else {
+              let vlog = Arc::new(ValueLog::open(self.opts.open_options(vp.fid()))?);
+              EntryKind::from_pointer(vp, ent.to_owned(), vlog)
+            }            
+          } else {
+            EntryKind::from_inlined(ent.to_owned())
+          };
+
+          return Ok(Some(EntryRef {
+            ent,
+            parent: file, 
+          }));
         }
         Ok(None) => continue,
         Err(e) => return Err(e.into()),
@@ -397,3 +522,4 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       })
   }
 }
+

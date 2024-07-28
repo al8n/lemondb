@@ -51,7 +51,6 @@ std::thread_local! {
   static LOG_FILENAME_BUFFER: core::cell::RefCell<std::string::String> = core::cell::RefCell::new(std::string::String::with_capacity(MAX_DIGITS + VLOG_EXTENSION.len().max(LOG_EXTENSION.len()) + 1));
 }
 
-#[cfg(feature = "sync")]
 trait Mu {
   type Guard<'a>
   where
@@ -60,7 +59,7 @@ trait Mu {
   fn lock_me(&self) -> Self::Guard<'_>;
 }
 
-#[cfg(all(feature = "parking_lot", feature = "sync"))]
+#[cfg(feature = "parking_lot")]
 impl<T: ?Sized> Mu for parking_lot::Mutex<T> {
   type Guard<'a> = parking_lot::MutexGuard<'a, T> where Self: 'a;
 
@@ -69,7 +68,7 @@ impl<T: ?Sized> Mu for parking_lot::Mutex<T> {
   }
 }
 
-#[cfg(all(not(feature = "parking_lot"), feature = "sync"))]
+#[cfg(not(feature = "parking_lot"))]
 impl<T: ?Sized> Mu for std::sync::Mutex<T> {
   type Guard<'a> = std::sync::MutexGuard<'a, T> where Self: 'a;
 
@@ -78,29 +77,4 @@ impl<T: ?Sized> Mu for std::sync::Mutex<T> {
   }
 }
 
-#[cfg(feature = "future")]
-trait AsyncMu {
-  type Guard<'a>
-  where
-    Self: 'a;
 
-  fn lock_me(&self) -> impl core::future::Future<Output = Self::Guard<'_>>;
-}
-
-#[cfg(feature = "future")]
-impl<T: ?Sized> AsyncMu for futures::lock::Mutex<T> {
-  type Guard<'a> = futures::lock::MutexGuard<'a, T> where Self: 'a;
-
-  async fn lock_me(&self) -> Self::Guard<'_> {
-    self.lock().await
-  }
-}
-
-#[cfg(feature = "tokio")]
-impl<T: ?Sized> AsyncMu for tokio::sync::Mutex<T> {
-  type Guard<'a> = tokio::sync::MutexGuard<'a, T> where Self: 'a;
-
-  async fn lock_me(&self) -> Self::Guard<'_> {
-    self.lock().await
-  }
-}

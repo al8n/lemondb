@@ -203,6 +203,22 @@ impl ValueLog {
     }
   }
 
+  /// Returns a byte slice which contains header, key and value, without bound check.
+  /// 
+  /// # Safety
+  /// - The caller must ensure that the offset and size are within the value log.
+  pub(crate) unsafe fn read_unchecked(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
+    match self.kind() {
+      ValueLogKind::Mmap(vlf) => vlf.read(offset, size),
+      ValueLogKind::MmapAnon(vlf) => vlf.read(offset, size),
+      ValueLogKind::Placeholder(_) => Err(ValueLogError::OutOfBound {
+        offset,
+        len: size,
+        size: 0,
+      }),
+    }
+  }
+
   /// Returns the encoded entry size for the given key and value.
   ///
   // **NOTE** when modify this method, also need to modify the write method in all kinds of value log
