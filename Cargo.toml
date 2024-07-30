@@ -1,5 +1,6 @@
 [workspace]
 members = ["lemondb", "async-lemondb"]
+resolver = "2"
 
 [workspace.dependencies]
 aol = { path = "../aol" }
@@ -14,6 +15,7 @@ fs4 = "0.9"
 hashbrown = { version = "0.14", default-features = false }
 indexmap = { version = "2", default-features = false }
 memmap2 = "0.9"
+once_cell = { version = "1", default-features = false }
 skl = { version = "0.14", path = "../skl-rs", default-features = false }
 smallvec-wrapper = { version = "0.1", default-features = false, features = ["const_new"] }
 smol_str = { version = "0.2", default-features = false }

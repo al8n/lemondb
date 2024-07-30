@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use cache::ValueLogCache;
 pub use skl::{Ascend, Comparator, Descend};
+use wal::LazyEntryRef;
 
 use super::*;
 
@@ -8,7 +10,7 @@ use crate::{
   error::Error,
   manifest::{ManifestFile, ManifestRecord},
   options::{MemoryMode, Options, TableOptions, WalOptions},
-  wal::Wal,
+  wal::{EntryRef, Wal},
   AtomicFid, Meta, Mu, TableId,
 };
 
@@ -225,12 +227,30 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
   }
 
   /// Get the value of the key.
-  pub fn get(&self, key: &[u8]) -> Result<Option<crate::types::Entry>, Error> {
+  ///
+  /// See also [`lazy_get`](#method.lazy_get).
+  pub fn get<'a, 'b: 'a>(&'a self, key: &'b [u8]) -> Result<Option<EntryRef<'a, C>>, Error> {
     self.check_status()?;
 
     let wal = unsafe { &*self.inner.wal.get() };
 
     wal.get(0, key)
+  }
+
+  /// Get the value of the key, if the value is a large value, which means this value is stored in the value log file,
+  /// then this method will not read the value from the value log file immediately, it depends on the user to decide
+  /// when to read the value from the value log file.
+  /// 
+  /// See also [`get`](#method.get) and [`LazyEntryRef`] for more information.
+  pub fn lazy_get<'a, 'b: 'a>(
+    &'a self,
+    key: &'b [u8],
+  ) -> Result<Option<LazyEntryRef<'a, C>>, Error> {
+    self.check_status()?;
+
+    let wal = unsafe { &*self.inner.wal.get() };
+
+    wal.lazy_get(0, key)
   }
 
   /// Insert a key-value pair into the table.
@@ -376,6 +396,7 @@ pub struct Db<C = Ascend> {
   fid_generator: Arc<AtomicFid>,
   manifest: Arc<Mutex<ManifestFile>>,
   tables: Mutex<HashMap<TableId, Table<C>>>,
+  cache: Option<Arc<ValueLogCache>>,
   default_wal: Wal<C>,
   main_write_tx: Sender<Event>,
   main_write_rx: Receiver<Event>,
@@ -495,6 +516,7 @@ impl Db {
           next_fid,
           self.fid_generator.clone(),
           self.manifest.clone(),
+          self.cache.clone(),
           self.cmp.clone(),
           opts.to_wal_options(self.in_memory),
         )?;

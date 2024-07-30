@@ -204,10 +204,14 @@ impl ValueLog {
   }
 
   /// Returns a byte slice which contains header, key and value, without bound check.
-  /// 
+  ///
   /// # Safety
   /// - The caller must ensure that the offset and size are within the value log.
-  pub(crate) unsafe fn read_unchecked(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
+  pub(crate) unsafe fn read_unchecked(
+    &self,
+    offset: usize,
+    size: usize,
+  ) -> Result<&[u8], ValueLogError> {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.read(offset, size),
       ValueLogKind::MmapAnon(vlf) => vlf.read(offset, size),

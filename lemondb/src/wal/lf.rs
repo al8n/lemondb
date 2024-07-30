@@ -7,7 +7,10 @@ use core::{
 use std::io;
 
 use bytes::Bytes;
-use skl::{Options, SkipMap, Trailer, map::{VersionedEntryRef, EntryRef}};
+use skl::{
+  map::{EntryRef, VersionedEntryRef},
+  Options, SkipMap, Trailer,
+};
 
 pub use skl::{
   Ascend, Comparator, Descend, MmapOptions, OpenOptions as SklOpenOptions, VacantBuffer,

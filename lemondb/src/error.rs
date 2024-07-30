@@ -5,7 +5,7 @@ use core::convert::Infallible;
 use either::Either;
 use smol_str::SmolStr;
 
-use crate::{manifest::ManifestFileError, TableId};
+use crate::{manifest::ManifestFileError, PointerError, TableId};
 
 /// Checksum mismatch.
 #[derive(Debug)]
@@ -192,4 +192,7 @@ pub enum Error {
   /// A value log error occurred.
   #[cfg_attr(feature = "std", error(transparent))]
   ValueLog(#[cfg_attr(feature = "std", from)] ValueLogError),
+  /// Failed to decode value pointer.
+  #[cfg_attr(feature = "std", error("failed to decode value pointer"))]
+  Pointer(#[cfg_attr(feature = "std", from)] PointerError),
 }

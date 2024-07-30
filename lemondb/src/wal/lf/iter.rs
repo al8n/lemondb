@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub struct LogFileIter<'a, C, Q: ?Sized = &'static [u8], R = core::ops::RangeFull> {
+pub(crate) struct LogFileIter<'a, C, Q: ?Sized = &'static [u8], R = core::ops::RangeFull> {
   pub(super) iter: skl::map::Iter<'a, Meta, Arc<C>, Q, R>,
   // Indicates if it is possible to yield items.
   pub(super) yield_: bool,

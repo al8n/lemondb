@@ -2,8 +2,10 @@ use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use bytes::Bytes;
 use crossbeam_skiplist::map::Entry as CMapEntry;
-use skl::{map::EntryRef as MapEntryRef, map::Entry as MapEntry, map::VersionedEntryRef as MapVersionedEntryRef, Trailer};
-
+use skl::{
+  map::Entry as MapEntry, map::EntryRef as MapEntryRef,
+  map::VersionedEntryRef as MapVersionedEntryRef, Trailer,
+};
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
 
@@ -177,14 +179,11 @@ pub(crate) struct Meta {
 
 impl core::fmt::Debug for Meta {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut f = f.debug_struct("Meta");
-    f.field("version", &self.version())
-      .field("checksum", &self.cks);
-    if self.is_big_value_pointer() || self.is_value_pointer() {
-      f.field("pointer", &true).finish()
-    } else {
-      f.field("pointer", &false).finish()
-    }
+    f.debug_struct("Meta")
+      .field("version", &self.version())
+      .field("checksum", &self.cks)
+      .field("pointer", &self.is_pointer())
+      .finish()
   }
 }
 
@@ -326,8 +325,6 @@ impl<'a> VersionedEntryRef<'a> {
     Self { ent }
   }
 }
-
-
 
 /// An entry in the log.
 #[derive(Debug, Clone)]

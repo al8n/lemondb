@@ -1,17 +1,24 @@
 use std::sync::Arc;
 
-use crossbeam_skiplist::{SkipMap, map::Entry as CMapEntry};
+use cache::ValueLogCache;
+use crossbeam_skiplist::{map::Entry as CMapEntry, SkipMap};
 use either::Either;
 use error::ValueLogError;
 use lf::LogFile;
 use manifest::{ManifestFile, ManifestRecord};
-#[cfg(feature = "std")]
-use quick_cache::sync::Cache;
+use once_cell::unsync::OnceCell;
 
-use skl::{map::{Entry as MapEntry, EntryRef as MapEntryRef, VersionedEntry, VersionedEntryRef as MapVersionedEntryRef}, Ascend, Trailer};
+use options::OpenOptions;
+use skl::{
+  map::{
+    Entry as MapEntry, EntryRef as MapEntryRef, VersionedEntry,
+    VersionedEntryRef as MapVersionedEntryRef,
+  },
+  Ascend, Trailer,
+};
 
 #[cfg(feature = "std")]
-use vlf::ValueLog;
+pub(crate) use vlf::ValueLog;
 
 use crate::options::CreateOptions;
 
@@ -76,7 +83,9 @@ impl EntryKind {
     match self {
       Self::Inlined(ent) => ent.value().unwrap(),
       // TODO: optimize read
-      Self::Pointer { pointer, log, .. } => log.read(pointer.offset() as usize, pointer.size() as usize).unwrap(),
+      Self::Pointer { pointer, log, .. } => log
+        .read(pointer.offset() as usize, pointer.size() as usize)
+        .unwrap(),
     }
   }
 }
@@ -110,6 +119,190 @@ impl<'a, C> EntryRef<'a, C> {
   }
 }
 
+enum LazyEntryKind {
+  Inlined(VersionedEntry<Meta>),
+  Cached {
+    ent: VersionedEntry<Meta>,
+    pointer: Pointer,
+    vlog: Arc<ValueLog>,
+  },
+  Pointer {
+    ent: VersionedEntry<Meta>,
+    pointer: Pointer,
+    vlog: OnceCell<Arc<ValueLog>>,
+    cache: Option<Arc<ValueLogCache>>,
+    opts: OpenOptions,
+  },
+}
+
+/// A lazy reference to an entry in the log.
+///
+/// For a lazy reference, it may in two states:
+/// - The value of the entry is inlined in the log file.
+/// - The value of the entry is stored in the value log file.
+///
+/// For the first state, you can directly access the value of the entry through the [`value`](#method.value) method.
+///
+/// For the second state, if you want to access the value, you need to call [`init`](#method.init) before calling [`value`](#method.value),
+/// or call [`value_or_init`](#method.value_or_init).
+/// After the first call to [`init`](#method.init) or [`value_or_init`](#method.value_or_init),
+/// you can directly call [`value`](#method.value) to access the value.
+///
+/// You can use the [`should_init`](#method.should_init) method to determine whether the entry needs to be initialized.
+pub struct LazyEntryRef<'a, C> {
+  parent: CMapEntry<'a, Fid, LogFile<C>>,
+  kind: LazyEntryKind,
+}
+
+impl<'a, C: Comparator> LazyEntryRef<'a, C> {
+  /// Returns the key of the entry.
+  #[inline]
+  pub fn key(&self) -> &[u8] {
+    match &self.kind {
+      LazyEntryKind::Inlined(ent) => ent.key(),
+      LazyEntryKind::Pointer { ent, .. } => ent.key(),
+      LazyEntryKind::Cached { ent, .. } => ent.key(),
+    }
+  }
+
+  /// Returns `true` if this entry needs to be initialized before accessing the value.
+  #[inline]
+  pub fn should_init(&self) -> bool {
+    match &self.kind {
+      LazyEntryKind::Pointer { .. } => true,
+      _ => false,
+    }
+  }
+
+  /// Returns the value of the entry.
+  ///
+  /// See [`value_or_init`](#method.value_or_init) for more information.
+  ///
+  /// # Panic
+  /// - If this entry's value is stored in value log file and before calling this method, the value has not been read yet.
+  #[inline]
+  pub fn value(&self) -> &[u8] {
+    match &self.kind {
+      LazyEntryKind::Inlined(ent) => ent.value().unwrap(),
+      LazyEntryKind::Cached { vlog, pointer, .. } => vlog.read(pointer.offset() as usize, pointer.size() as usize).unwrap(),
+      LazyEntryKind::Pointer { vlog, pointer, .. } => {
+        vlog.get().expect("value log file has not been loaded yet, please invoke `init` or `value_or_init` before using this method directly.").read(pointer.offset() as usize, pointer.size() as usize).unwrap()
+      }
+    }
+  }
+
+  /// Returns the value of the entry, if it is inlined it will return the value directly,
+  /// otherwise it will read the value from the value log file.
+  #[inline]
+  pub fn value_or_init(&self) -> Result<&[u8], Error> {
+    match &self.kind {
+      LazyEntryKind::Inlined(ent) => Ok(ent.value().unwrap()),
+      LazyEntryKind::Cached { pointer, vlog, .. } => Ok(
+        vlog
+          .read(pointer.offset() as usize, pointer.size() as usize)
+          .unwrap(),
+      ),
+      LazyEntryKind::Pointer {
+        vlog,
+        pointer,
+        cache,
+        opts,
+        ..
+      } => {
+        vlog.get_or_try_init(|| {
+          let vlog = ValueLog::open(*opts).map(Arc::new)?;
+          if let Some(cache) = cache.as_ref() {
+            cache.insert(pointer.fid(), vlog.clone());
+          }
+          Result::<_, Error>::Ok(vlog)
+        })?;
+
+        let fid = pointer.fid();
+
+        let vlog = vlog.get_or_try_init(|| {
+          let vlog = ValueLog::open(*opts).map(Arc::new)?;
+          if let Some(cache) = cache.as_ref() {
+            cache.insert(fid, vlog.clone());
+          }
+          Result::<_, Error>::Ok(vlog)
+        })?;
+
+        vlog
+          .read(pointer.offset() as usize, pointer.size() as usize)
+          .map_err(Into::into)
+      }
+    }
+  }
+
+  /// Initializes the value log file of this entry.
+  ///
+  /// Not necessary if the value of this entry is inlined in the log file. Use [`should_init`](#method.should_init) to determine whether initialization is required.
+  #[inline]
+  pub fn init(&self) -> Result<(), Error> {
+    match &self.kind {
+      LazyEntryKind::Pointer {
+        vlog,
+        pointer,
+        cache,
+        opts,
+        ..
+      } => {
+        vlog.get_or_try_init(|| {
+          let vlog = ValueLog::open(*opts).map(Arc::new)?;
+          if let Some(cache) = cache.as_ref() {
+            cache.insert(pointer.fid(), vlog.clone());
+          }
+          Result::<_, Error>::Ok(vlog)
+        })?;
+
+        Ok(())
+      }
+      _ => Ok(()),
+    }
+  }
+
+  #[inline]
+  const fn from_inlined(ent: VersionedEntry<Meta>, parent: CMapEntry<'a, Fid, LogFile<C>>) -> Self {
+    Self {
+      parent,
+      kind: LazyEntryKind::Inlined(ent),
+    }
+  }
+
+  #[inline]
+  fn from_cache(
+    ent: VersionedEntry<Meta>,
+    parent: CMapEntry<'a, Fid, LogFile<C>>,
+    pointer: Pointer,
+    vlog: Arc<ValueLog>,
+  ) -> Self {
+    Self {
+      parent,
+      kind: LazyEntryKind::Cached { ent, pointer, vlog },
+    }
+  }
+
+  #[inline]
+  fn from_pointer(
+    ent: VersionedEntry<Meta>,
+    parent: CMapEntry<'a, Fid, LogFile<C>>,
+    pointer: Pointer,
+    opts: OpenOptions,
+    cache: Option<Arc<ValueLogCache>>,
+  ) -> Self {
+    Self {
+      parent,
+      kind: LazyEntryKind::Pointer {
+        ent,
+        pointer,
+        vlog: OnceCell::new(),
+        cache,
+        opts,
+      },
+    }
+  }
+}
+
 pub(crate) struct Wal<C = Ascend> {
   fid_generator: Arc<AtomicFid>,
 
@@ -121,7 +314,7 @@ pub(crate) struct Wal<C = Ascend> {
 
   /// Cache for value log files.
   #[cfg(feature = "std")]
-  vcache: Option<Arc<Cache<Fid, Arc<ValueLog>>>>,
+  vcache: Option<Arc<ValueLogCache>>,
 
   manifest: Arc<Mutex<ManifestFile>>,
   opts: WalOptions,
@@ -135,6 +328,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     fid: Fid,
     fid_generator: Arc<AtomicFid>,
     manifest: Arc<Mutex<ManifestFile>>,
+    #[cfg(feature = "std")] cache: Option<Arc<ValueLogCache>>,
     cmp: Arc<C>,
     opts: WalOptions,
   ) -> Result<Self, Error> {
@@ -154,7 +348,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       lfs: map,
       vlf: Arc::new(ValueLog::placeholder(Fid::MAX)),
       #[cfg(feature = "std")]
-      vcache: None,
+      vcache: cache,
       manifest,
       opts,
       cmp,
@@ -213,7 +407,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           let ent = if ent.trailer().is_pointer() {
             let vp_buf = ent.value().unwrap();
             let (_, vp) = Pointer::decode(vp_buf)?;
-            
+
             if let Some(cache) = self.vcache.as_ref() {
               if let Some(vlog) = cache.get(&vp.fid()) {
                 EntryKind::from_pointer(vp, ent.to_owned(), vlog)
@@ -225,15 +419,70 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
             } else {
               let vlog = Arc::new(ValueLog::open(self.opts.open_options(vp.fid()))?);
               EntryKind::from_pointer(vp, ent.to_owned(), vlog)
-            }            
+            }
           } else {
             EntryKind::from_inlined(ent.to_owned())
           };
 
-          return Ok(Some(EntryRef {
-            ent,
-            parent: file, 
-          }));
+          return Ok(Some(EntryRef { ent, parent: file }));
+        }
+        Ok(None) => continue,
+        Err(e) => return Err(e.into()),
+      }
+    }
+
+    Ok(None)
+  }
+
+  pub(crate) fn lazy_get<'a, 'b: 'a>(
+    &'a self,
+    version: u64,
+    key: &'b [u8],
+  ) -> Result<Option<LazyEntryRef<'a, C>>, Error> {
+    for file in self.lfs.iter().rev() {
+      let lf = file.value();
+
+      if !lf.contains_version(version) {
+        continue;
+      }
+
+      match lf.get(version, key) {
+        Ok(Some(ent)) => {
+          if ent.is_removed() {
+            return Ok(None);
+          }
+
+          let ent = if ent.trailer().is_pointer() {
+            let vp_buf = ent.value().unwrap();
+            let (_, vp) = Pointer::decode(vp_buf)?;
+            let fid = vp.fid();
+
+            if let Some(cache) = self.vcache.as_ref() {
+              if let Some(vlog) = cache.get(&fid) {
+                LazyEntryRef::from_cache(ent.to_owned(), file, vp, vlog)
+              } else {
+                LazyEntryRef::from_pointer(
+                  ent.to_owned(),
+                  file,
+                  vp,
+                  self.opts.open_options(fid),
+                  self.vcache.clone(),
+                )
+              }
+            } else {
+              LazyEntryRef::from_pointer(
+                ent.to_owned(),
+                file,
+                vp,
+                self.opts.open_options(fid),
+                self.vcache.clone(),
+              )
+            }
+          } else {
+            LazyEntryRef::from_inlined(ent.to_owned(), file)
+          };
+
+          return Ok(Some(ent));
         }
         Ok(None) => continue,
         Err(e) => return Err(e.into()),
@@ -522,4 +771,3 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       })
   }
 }
-

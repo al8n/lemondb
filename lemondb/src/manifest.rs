@@ -574,11 +574,3 @@ impl ManifestFile {
     self.tid.increment()
   }
 }
-
-
-#[cfg(feature = "future")]
-mod future;
-#[cfg(feature = "future")]
-pub(crate) use future::AsyncManifestFile;
-
-

@@ -76,5 +76,3 @@ impl<T: ?Sized> Mu for std::sync::Mutex<T> {
     self.lock().unwrap()
   }
 }
-
-
