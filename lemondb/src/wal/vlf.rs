@@ -190,6 +190,12 @@ impl ValueLog {
     }
   }
 
+  /// Returns `true` if the value log is a placeholder.
+  #[inline]
+  pub(crate) fn is_placeholder(&self) -> bool {
+    matches!(self.kind(), ValueLogKind::Placeholder(_))
+  }
+
   /// Returns a byte slice which contains header, key and value.
   pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
     match self.kind() {

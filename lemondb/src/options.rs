@@ -4,6 +4,7 @@ const MB: usize = 1 << 20;
 const GB: usize = 1 << 30;
 const DEFAULT_WRITE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_IGNORE_WRITES_AFTER_CLOSE: bool = false;
+const DEFAULT_MAX_IMMUTABLE_VLOGS: u8 = 1;
 
 /// The options for creating a log.
 #[viewit::viewit(getters(style = "move"), setters(prefix = "with"))]
@@ -223,6 +224,30 @@ pub struct WalOptions {
   )]
   big_value_threshold: u64,
 
+  /// The maximum number of immutable value logs kept opened. Default is `1`.
+  ///
+  /// Increasing this value will increase the read performance but also increase the memory usage.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "
+
+    Returns the maximum number of immutable value logs kept opened. Default is `1`. 
+    
+    Increasing this value will increase the read performance
+    but also increase the memory usage.
+    
+    ")
+    ),
+    setter(attrs(doc = "
+    Sets the maximum number of immutable value logs kept opened. Default is `1`.
+
+    Increasing this value will increase the read performance but also increase the memory usage.
+    
+    "))
+  )]
+  max_immutable_vlogs: u8,
+
   /// Whether to lock the log. Default is `true`.
   ///
   /// If `true`, the log will be locked exlusively when it is created.
@@ -267,6 +292,7 @@ impl WalOptions {
       vlog_size: 2 * GB as u64,
       value_threshold: MB as u64,
       big_value_threshold: GB as u64,
+      max_immutable_vlogs: DEFAULT_MAX_IMMUTABLE_VLOGS,
       lock: true,
       sync_on_write: true,
       in_memory: None,
@@ -407,6 +433,30 @@ pub struct TableOptions {
   )]
   big_value_threshold: u64,
 
+  /// The maximum number of immutable value logs kept opened. Default is `1`.
+  ///
+  /// Increasing this value will increase the read performance but also increase the memory usage.
+  #[viewit(
+    getter(
+      const,
+      attrs(doc = "
+
+    Returns the maximum number of immutable value logs kept opened. Default is `1`. 
+    
+    Increasing this value will increase the read performance
+    but also increase the memory usage.
+    
+    ")
+    ),
+    setter(attrs(doc = "
+    Sets the maximum number of immutable value logs kept opened. Default is `1`.
+
+    Increasing this value will increase the read performance but also increase the memory usage.
+    
+    "))
+  )]
+  max_immutable_vlogs: u8,
+
   /// The write buffer size. Default is `1024`.
   ///
   /// The write buffer is used to buffer the write operations before they are written to the database.
@@ -454,6 +504,7 @@ impl TableOptions {
       standalone: false,
       write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
       ignore_writes_after_close: DEFAULT_IGNORE_WRITES_AFTER_CLOSE,
+      max_immutable_vlogs: wal.max_immutable_vlogs,
       log_size: wal.log_size,
       vlog_size: wal.vlog_size,
       value_threshold: wal.value_threshold,
@@ -471,6 +522,7 @@ impl TableOptions {
       value_threshold: self.value_threshold,
       big_value_threshold: self.big_value_threshold,
       sync_on_write: self.sync_on_write,
+      max_immutable_vlogs: self.max_immutable_vlogs,
       in_memory,
       lock: self.lock,
     }
@@ -486,6 +538,7 @@ impl From<WalOptions> for TableOptions {
       standalone: false,
       write_buffer_size: DEFAULT_WRITE_BUFFER_SIZE,
       ignore_writes_after_close: DEFAULT_IGNORE_WRITES_AFTER_CLOSE,
+      max_immutable_vlogs: val.max_immutable_vlogs,
       log_size: val.log_size,
       vlog_size: val.vlog_size,
       value_threshold: val.value_threshold,

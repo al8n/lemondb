@@ -309,8 +309,9 @@ pub(crate) struct Wal<C = Ascend> {
   /// All of the log files.
   lfs: SkipMap<Fid, LogFile<C>>,
 
-  /// The active value log files.
-  vlf: Arc<ValueLog>,
+  /// The value log files, the last one is the active value log file.
+  /// not all value log files are stored in this map.
+  vlfs: SkipMap<Fid, Arc<ValueLog>>,
 
   /// Cache for value log files.
   #[cfg(feature = "std")]
@@ -346,7 +347,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     Ok(Self {
       fid_generator,
       lfs: map,
-      vlf: Arc::new(ValueLog::placeholder(Fid::MAX)),
+      vlfs: SkipMap::new(),
       #[cfg(feature = "std")]
       vcache: cache,
       manifest,
@@ -368,16 +369,18 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       lfs.insert(*fid, l);
     }
 
-    let vlf = if let Some(fid) = table_manifest.vlogs.last() {
-      ValueLog::open(opts.open_options(*fid))?
+    let vlfs = if let Some(fid) = table_manifest.vlogs.last() {
+      let map = SkipMap::new();
+      map.insert(*fid, Arc::new(ValueLog::open(opts.open_options(*fid))?));
+      map
     } else {
-      ValueLog::placeholder(Fid::MAX)
+      SkipMap::new()
     };
 
     Ok(Self {
       fid_generator,
       lfs,
-      vlf: Arc::new(vlf),
+      vlfs,
       #[cfg(feature = "std")]
       vcache: None,
       manifest,
@@ -535,6 +538,122 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     Ok(())
   }
 
+  pub(crate) fn insert_batch(
+    &mut self,
+    tid: TableId,
+    version: u64,
+    mut batch: Batch,
+  ) -> Result<(), Error> {
+    let mut expected_log_size = 0;
+    let mut expected_value_log_size = 0;
+    let last = self.lfs.back().expect("no active log file");
+    let mut big_values = Vec::new();
+    let lf = last.value();
+
+    // Calculate the size information
+    batch.pairs.iter_mut().for_each(|(k, v)| {
+      let height = lf.map.random_height();
+      let value_size = match &v.val {
+        Some(val) => {
+          let raw_val_size = val.len();
+          if raw_val_size as u64 > self.opts.value_threshold {
+            if raw_val_size as u64 > self.opts.big_value_threshold {
+              let mut meta = Meta::big_value_pointer(version);
+              let cks = checksum(meta.raw(), k, Some(val));
+              meta.set_checksum(cks);
+              v.meta = Some(meta);
+
+              big_values.push(k);
+            } else {
+              let mut meta = Meta::value_pointer(version);
+              let cks = checksum(meta.raw(), k, Some(val));
+              meta.set_checksum(cks);
+              v.meta = Some(meta);
+
+              expected_value_log_size += ValueLog::encoded_entry_size(version, k, val, cks);
+            }
+
+            Pointer::MAX_ENCODING_SIZE
+          } else {
+            let mut meta = Meta::new(version);
+            let cks = checksum(meta.raw(), k, Some(val));
+            meta.set_checksum(cks);
+            v.meta = Some(meta);
+
+            val.len()
+          }
+        }
+        None => {
+          let mut meta = Meta::new(version);
+          let cks = checksum(meta.raw(), k, None);
+          meta.set_checksum(cks);
+          v.meta = Some(meta);
+
+          0
+        }
+      };
+      v.height = height;
+      expected_log_size += lf
+        .map
+        .estimated_node_size(height, k.len() as u32, value_size as u32)
+    });
+
+    // check if the current log file and value log file have enough space
+
+    // 1. some entries are inlined, and some entries need to be written to the standalone value log file
+    // no entries need to be written to the shared value log file.
+    if expected_value_log_size == 0 {
+      let remaining = lf.map.remaining();
+      // the current active log file does not have enough space
+      // create a new log file
+      if remaining < expected_log_size {
+        let size = if expected_log_size as u64 > self.opts.log_size {
+          expected_log_size as u64
+        } else {
+          self.opts.log_size
+        };
+
+        let new_fid = self.fid_generator.increment();
+        let mut new_lf = LogFile::create(
+          self.cmp.clone(),
+          self.opts.create_options(new_fid).with_size(size),
+        )?;
+        self
+          .manifest
+          .lock_me()
+          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
+
+        let res = batch.pairs.iter().try_for_each(|(k, v)| {
+          let meta = v.meta.unwrap();
+          match &v.val {
+            Some(val) => new_lf.insert(meta, k, val).map(|_| ()),
+            None => new_lf.remove(meta, k),
+          }
+        });
+
+        return match res {
+          Ok(_) => {
+            self.lfs.insert(new_fid, new_lf);
+            Ok(())
+          }
+          Err(e) => {
+            if let Err(_e) = new_lf.clear() {
+              #[cfg(feature = "tracing")]
+              tracing::error!(err=%_e, "failed to clear log file");
+            }
+
+            self.lfs.insert(new_fid, new_lf);
+            Err(e.into())
+          }
+        };
+      }
+    }
+
+    // 2.
+
+    todo!()
+  }
+
   pub(crate) fn insert(
     &mut self,
     tid: TableId,
@@ -589,14 +708,26 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     }
 
     let new_fid = self.fid_generator.increment();
-    let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))?;
+    let mut new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))?;
     self
       .manifest
       .lock_me()
       .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
-    new_lf.insert(meta, key, val)?;
-    self.lfs.insert(new_fid, new_lf);
-    Ok(())
+    match new_lf.insert(meta, key, val) {
+      Ok(_) => {
+        self.lfs.insert(new_fid, new_lf);
+        Ok(())
+      }
+      Err(e) => {
+        if let Err(_e) = new_lf.clear() {
+          #[cfg(feature = "tracing")]
+          tracing::error!(err=%_e, "failed to clear log file");
+        }
+
+        self.lfs.insert(new_fid, new_lf);
+        Err(e.into())
+      }
+    }
   }
 
   fn insert_entry_to_shared_vlog(
@@ -609,25 +740,43 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     meta.set_value_pointer();
 
     let mut buf = [0; Pointer::MAX_ENCODING_SIZE];
-    let woffset = self.vlf.len();
-    match self.vlf.write(meta.version(), key, val, meta.checksum()) {
+    let active_vlf_entry = match self.vlfs.back() {
+      Some(entry) => entry,
+      None => {
+        let new_fid = self.fid_generator.increment();
+        let vlog = ValueLog::create(CreateOptions::new(new_fid))?;
+        self
+          .manifest
+          .lock_me()
+          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
+        self.vlfs.insert(new_fid, Arc::new(vlog));
+        self.vlfs.back().unwrap()
+      }
+    };
+    let active_vlf = active_vlf_entry.value();
+    let woffset = active_vlf.len();
+    match active_vlf.write(meta.version(), key, val, meta.checksum()) {
       Ok(vp) => {
         // This will never fail because the buffer is big enough
         let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
         let vp_buf = &buf[..encoded_size];
+        drop(active_vlf_entry);
 
-        self.insert_to_log(tid, meta, key, vp_buf).map_err(|e| {
-          // rewind the value log file
-          if let Err(_e) = self.vlf.rewind(woffset) {
-            #[cfg(feature = "tracing")]
-            tracing::error!(err=%_e, "failed to rewind value log file");
+        match self.insert_to_log(tid, meta, key, vp_buf) {
+          Ok(_) => Ok(()),
+          Err(e) => {
+            // rewind the value log file
+            if let Err(_e) = self.vlfs.back().unwrap().value().rewind(woffset) {
+              #[cfg(feature = "tracing")]
+              tracing::error!(err=%_e, "failed to rewind value log file");
+            }
+            Err(e)
           }
-          e
-        })
+        }
       }
       Err(ValueLogError::NotEnoughSpace { .. }) => {
-        let new_fid = self.fid_generator.increment();
-        let vlog = ValueLog::create(CreateOptions::new(new_fid))?;
+        let new_vlf_fid = self.fid_generator.increment();
+        let vlog = ValueLog::create(CreateOptions::new(new_vlf_fid))?;
         let vp = vlog
           .write(meta.version(), key, val, meta.checksum())
           .map_err(|e| {
@@ -639,57 +788,125 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
         let vp_buf = &buf[..encoded_size];
 
-        // write new fid to manifest file
-        let mut manifest_file = self.manifest.lock_me();
+        let rewind = |res: Error, vlf: &ValueLog| {
+          if let Err(e) = vlf.rewind(0) {
+            #[cfg(feature = "tracing")]
+            tracing::error!(err=%e, "failed to rewind value log file");
+          }
 
-        manifest_file
-          .append(aol::Entry::creation_with_custom_flags(
-            CustomFlags::empty().with_bit1(),
-            ManifestRecord::log(new_fid, tid),
-          ))
-          .map_err(|e| {
-            if let Err(_e) = vlog.remove() {
-              #[cfg(feature = "tracing")]
-              tracing::error!(err=%_e, "failed to remove unregistered value log file");
-            }
+          res
+        };
 
-            e.into()
-          })
-          .and_then(|_| {
-            self.vlf = Arc::new(vlog);
+        let active_lf = self.lfs.back().expect("no active log file");
+        let active_lf = active_lf.value();
+        let height = active_lf.random_height();
+        let has_space = active_lf.has_space(height, key.len() as u32, vp_buf.len() as u32);
 
-            let rewind = |res: Error| {
-              if let Err(e) = self.vlf.rewind(0) {
+        if has_space {
+          // register value log file to manifest file
+          self
+            .manifest
+            .lock_me()
+            .append(aol::Entry::creation_with_custom_flags(
+              CustomFlags::empty().with_bit1(),
+              ManifestRecord::log(new_vlf_fid, tid),
+            ))
+            .map_err(|e| {
+              if let Err(_e) = vlog.rewind(0) {
                 #[cfg(feature = "tracing")]
-                tracing::error!(err=%e, "failed to rewind value log file");
+                tracing::error!(err=%_e, "failed to remove unregistered value log file");
               }
 
-              res
-            };
+              e
+            })?;
 
-            {
-              let active_lf = self.lfs.back().expect("no active log file");
-              match active_lf.value().insert(meta, key, vp_buf) {
-                Ok(_) => return Ok(()),
-                Err(LogFileError::Log(skl::map::Error::Arena(
-                  skl::ArenaError::InsufficientSpace { .. },
-                ))) => {}
-                Err(e) => return Err(rewind(e.into())),
+          // update the current value log file
+          self.update_active_vlog(new_vlf_fid, vlog);
+
+          // insert the key and value pointer to the active log file
+          return active_lf
+            .insert_at_height(meta, height, key, vp_buf)
+            .map(|_| ())
+            .map_err(|e| rewind(e.into(), self.vlfs.back().unwrap().value()));
+        }
+
+        // log file does not have enough space, create a new log file
+        let new_lf_fid = self.fid_generator.increment();
+        let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_lf_fid));
+
+        match new_lf {
+          Err(e) => {
+            // we failed to create a new log file,
+            // but we can still update the active value log file
+            // rewind the value log file first
+            let res = rewind(e.into(), &vlog);
+
+            // register new value log file to manifest file
+            self
+              .manifest
+              .lock_me()
+              .append(aol::Entry::creation_with_custom_flags(
+                CustomFlags::empty().with_bit1(),
+                ManifestRecord::log(new_vlf_fid, tid),
+              ))
+              .map_err(|e| {
+                // if we failed to register the new value log file to manifest file
+                // then we need to remove the unregistered value log file to avoid intermediate state
+                if let Err(_e) = vlog.remove() {
+                  #[cfg(feature = "tracing")]
+                  tracing::error!(err=%_e, "failed to remove unregistered value log file");
+                }
+
+                e
+              })?;
+
+            // update the current value log file
+            self.update_active_vlog(new_vlf_fid, vlog);
+
+            Err(res)
+          }
+          Ok(new_lf) => {
+            // we successfully created a new log file
+            // now register the new value log file and new log file to manifest file
+            let res = self.manifest.lock_me().append_batch(vec![
+              aol::Entry::creation_with_custom_flags(
+                CustomFlags::empty().with_bit1(),
+                ManifestRecord::log(new_vlf_fid, tid),
+              ),
+              aol::Entry::creation(ManifestRecord::log(new_lf_fid, tid)),
+            ]);
+
+            match res {
+              Ok(_) => {
+                // update the active value log file and log file
+                self.update_active_vlog(new_vlf_fid, vlog);
+                new_lf
+                  .insert(meta, key, vp_buf)
+                  .map_err(|e| rewind(e.into(), self.vlfs.back().unwrap().value()))?;
+
+                self.lfs.insert(new_lf_fid, new_lf);
+
+                Ok(())
+              }
+              Err(e) => {
+                // if we failed to register the new value log file and new log file to manifest file
+                // then we need to remove the unregistered value log file and new log file to avoid intermediate state
+                if let Err(_e) = vlog.remove() {
+                  #[cfg(feature = "tracing")]
+                  tracing::error!(err=%_e, "failed to remove unregistered value log file");
+                }
+
+                // SAFETY: we just created the new log file, so it is safe to remove it
+                if let Err(_e) = unsafe { new_lf.remove_file() } {
+                  #[cfg(feature = "tracing")]
+                  tracing::error!(err=%_e, "failed to remove unregistered log file");
+                }
+
+                Err(e.into())
               }
             }
-
-            let new_fid = self.fid_generator.increment();
-            let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))
-              .map_err(|e| rewind(e.into()))?;
-            manifest_file
-              .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))
-              .map_err(|e| rewind(e.into()))?;
-            new_lf
-              .insert(meta, key, vp_buf)
-              .map_err(|e| rewind(e.into()))?;
-            self.lfs.insert(new_fid, new_lf);
-            Ok(())
-          })
+          }
+        }
       }
       Err(e) => Err(e.into()),
     }
@@ -763,11 +980,36 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         manifest_file
           .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))
           .map_err(|e| remove(e.into()))?;
-        new_lf
-          .insert(meta, key, vp_buf)
-          .map_err(|e| remove(e.into()))?;
-        self.lfs.insert(new_fid, new_lf);
-        Ok(())
+        let res = new_lf.insert(meta, key, vp_buf);
+
+        match res {
+          Ok(_) => {
+            self.lfs.insert(new_fid, new_lf);
+            Ok(())
+          }
+          Err(e) => {
+            self.lfs.insert(new_fid, new_lf);
+            Err(remove(e.into()))
+          }
+        }
       })
+  }
+
+  #[inline]
+  fn update_active_vlog(&self, fid: Fid, vlog: ValueLog) {
+    // update the current value log file
+    self.vlfs.insert(fid, Arc::new(vlog));
+    if self.vlfs.len() > self.opts.max_immutable_vlogs as usize + 1 {
+      if let Some(old_vlf) = self.vlfs.pop_front() {
+        let old_vlf = old_vlf.value();
+        if !old_vlf.is_placeholder() {
+          // if we have a cache, insert the oldest value log file to the cache
+          #[cfg(feature = "std")]
+          if let Some(ref vcache) = self.vcache {
+            vcache.insert(old_vlf.fid(), old_vlf.clone());
+          }
+        }
+      }
+    }
   }
 }

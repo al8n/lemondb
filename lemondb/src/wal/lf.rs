@@ -9,7 +9,7 @@ use std::io;
 use bytes::Bytes;
 use skl::{
   map::{EntryRef, VersionedEntryRef},
-  Options, SkipMap, Trailer,
+  Options, SkipMap, Trailer, UnlinkedNode,
 };
 
 pub use skl::{
@@ -25,7 +25,7 @@ pub use all_versions_iter::*;
 
 /// A append-only log based on on-disk [`SkipMap`] for key-value databases based on bitcask model.
 pub struct LogFile<C = Ascend> {
-  map: SkipMap<Meta, Arc<C>>,
+  pub(super) map: SkipMap<Meta, Arc<C>>,
   fid: Fid,
   sync_on_write: bool,
   ro: bool,
@@ -114,10 +114,9 @@ impl<C: Comparator> LogFile<C> {
       });
     }
 
-    LOG_FILENAME_BUFFER.with(|buf| {
-      let mut buf = buf.borrow_mut();
+    LOG_FILENAME_BUFFER.with_borrow_mut(|buf| {
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid, LOG_EXTENSION).unwrap();
+      write!(buf, "{:020}.{}", opts.fid, LOG_EXTENSION).unwrap();
       let open_opts = SklOpenOptions::new()
         .create_new(Some(opts.size as u32))
         .read(true)
@@ -176,10 +175,9 @@ impl<C: Comparator> LogFile<C> {
   pub fn open(cmp: Arc<C>, opts: OpenOptions) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
-    LOG_FILENAME_BUFFER.with(|buf| {
-      let mut buf = buf.borrow_mut();
+    LOG_FILENAME_BUFFER.with_borrow_mut(|buf| {
       buf.clear();
-      write!(buf, "{:010}.{}", opts.fid, LOG_EXTENSION).unwrap();
+      write!(buf, "{:020}.{}", opts.fid, LOG_EXTENSION).unwrap();
       let open_opts = SklOpenOptions::new().read(true);
       SkipMap::<Meta, _>::map_with_comparator(
         buf.as_str(),
@@ -243,6 +241,66 @@ impl<C: Comparator> LogFile<C> {
     }
   }
 
+  /// Inserts the given key and value to the log.
+  #[inline]
+  pub fn insert_at_height<'a, 'b: 'a>(
+    &'a self,
+    meta: Meta,
+    height: skl::u5,
+    key: &'b [u8],
+    value: &'b [u8],
+  ) -> Result<Option<EntryRef<'a, Meta>>, LogFileError> {
+    match self.map.insert_at_height(meta, height, key, value) {
+      Ok(ent) => {
+        if self.sync_on_write {
+          self.flush()?;
+        }
+        Ok(ent)
+      }
+      Err(e) => Err(LogFileError::Log(e)),
+    }
+  }
+
+  /// Attach an unlinked node to the log.
+  #[inline]
+  pub fn attach<'a>(&'a self, node: UnlinkedNode<'a, Meta>) -> Result<(), LogFileError> {
+    match self.map.link(node) {
+      Ok(_) => {
+        if self.sync_on_write {
+          self.flush()?;
+        }
+        Ok(())
+      }
+      Err(e) => Err(LogFileError::Log(e)),
+    }
+  }
+
+  /// Returns a random height for underlying skip list.
+  #[inline]
+  pub fn random_height(&self) -> skl::u5 {
+    self.map.random_height()
+  }
+
+  /// Returns if the log has space for the given key and value.
+  #[inline]
+  pub fn has_space(&self, height: skl::u5, key: u32, value: u32) -> bool {
+    self.map.remaining() >= self.map.estimated_node_size(height, key, value)
+  }
+
+  /// Allocates the given key and value to the log.
+  #[inline]
+  pub fn allocate<'a, 'b: 'a>(
+    &'a self,
+    meta: Meta,
+    key: &'b [u8],
+    value: &'b [u8],
+  ) -> Result<UnlinkedNode<'a, Meta>, LogFileError> {
+    self
+      .map
+      .allocate(meta, key, value)
+      .map_err(LogFileError::Log)
+  }
+
   /// Inserts a new key if it does not yet exist. Returns `Ok(())` if the key was successfully inserted.
   ///
   /// This method is useful when you want to insert a key and you know the value size but you do not have the value
@@ -297,6 +355,27 @@ impl<C: Comparator> LogFile<C> {
       .compare_remove(meta, key, Ordering::AcqRel, Ordering::Relaxed)
       .map(|_| ())
       .map_err(Into::into)
+  }
+
+  /// # Safety
+  /// - must ensure that there is only one copy of the log file.
+  #[inline]
+  pub(crate) unsafe fn remove_file(self) -> Result<(), LogFileError> {
+    let fid = self.fid;
+    drop(self);
+
+    LOG_FILENAME_BUFFER.with_borrow_mut(|buf| {
+      use std::fmt::Write;
+
+      buf.clear();
+      write!(buf, "{:020}.{}", fid, LOG_EXTENSION).unwrap();
+      std::fs::remove_file(buf.as_str()).map_err(Into::into)
+    })
+  }
+
+  #[inline]
+  pub(crate) fn clear(&mut self) -> Result<(), LogFileError> {
+    unsafe { self.map.clear().map_err(Into::into) }
   }
 
   /// Gets the value associated with the given key.

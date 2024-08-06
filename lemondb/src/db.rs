@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use cache::ValueLogCache;
-pub use skl::{Ascend, Comparator, Descend};
+pub use skl::{u5, Ascend, Comparator, Descend};
 use wal::LazyEntryRef;
 
 use super::*;
@@ -34,6 +34,9 @@ use aol::CustomFlags;
 #[cfg(feature = "parking_lot")]
 use parking_lot::Mutex;
 use smol_str::SmolStr;
+
+#[cfg(test)]
+mod tests;
 
 struct StandaloneTableWriter<C = Ascend> {
   name: SmolStr,
@@ -165,6 +168,14 @@ impl<C: Comparator + Send + Sync + 'static> StandaloneTableWriter<C> {
             }
             Ok(Event::WriteBatch { table_id, batch, tx }) => {
               assert_eq!(id, table_id, "table({id})'s writer receive a write event of table({table_id}), please report this bug to https://github.com/al8n/lemondb/issues");
+
+              // Safety: we are the only thread that writes the wal.
+              let wal = unsafe { &mut *self.wal.get() };
+
+              if let Err(_e) = tx.send(wal.insert_batch(id, 0, batch)) {
+                #[cfg(feature = "tracing")]
+                tracing::error!(table_id=%id, table_name=%self.name, err=%_e, "failed to send write result");
+              }
             }
             Ok(Event::Remove { table_id, key, tx }) => {
               assert_eq!(id, table_id, "table({id})'s writer receive a write event of table({table_id}), please report this bug to https://github.com/al8n/lemondb/issues");
@@ -240,7 +251,7 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
   /// Get the value of the key, if the value is a large value, which means this value is stored in the value log file,
   /// then this method will not read the value from the value log file immediately, it depends on the user to decide
   /// when to read the value from the value log file.
-  /// 
+  ///
   /// See also [`get`](#method.get) and [`LazyEntryRef`] for more information.
   pub fn lazy_get<'a, 'b: 'a>(
     &'a self,
@@ -257,6 +268,12 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
   #[inline]
   pub fn insert(&self, key: Bytes, value: Bytes) -> Result<(), Error> {
     self.insert_in(key, value)
+  }
+
+  /// Insert a batch of key-value pairs into the table.
+  #[inline]
+  pub fn insert_batch(&self, batch: Batch) -> Result<(), Error> {
+    self.insert_batch_in(batch)
   }
 
   /// Remove a key from the table.
@@ -300,6 +317,25 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
       table_id: self.inner.id,
       key,
       value,
+      tx,
+    }) {
+      #[cfg(feature = "tracing")]
+      tracing::error!(table_id=%self.inner.id, table=%self.inner.name, err=%_e);
+    }
+
+    match rx.recv() {
+      Ok(res) => res,
+      Err(_) => Err(Error::TableClosed(self.inner.name.clone())),
+    }
+  }
+
+  fn insert_batch_in(&self, batch: Batch) -> Result<(), Error> {
+    self.check_status()?;
+
+    let (tx, rx) = oneshot::channel();
+    if let Err(_e) = self.inner.write_tx.send(Event::WriteBatch {
+      table_id: self.inner.id,
+      batch,
       tx,
     }) {
       #[cfg(feature = "tracing")]
@@ -372,6 +408,135 @@ impl<C: Comparator + Send + Sync + 'static> Table<C> {
   }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchKey(Bytes);
+
+impl core::ops::Deref for BatchKey {
+  type Target = Bytes;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+impl PartialOrd for BatchKey {
+  fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for BatchKey {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    // compare the length first, then compare the content
+    // when inserting the key-value pair into the batch, the key is sorted by the length first, then the content
+    // In this way, when the batch is written to the log file, the key with the longest length will be written first,
+    // so that we can do key compression optimization when writing the log file.
+    self
+      .0
+      .len()
+      .cmp(&other.0.len())
+      .then_with(|| self.0.cmp(&other.0))
+      .reverse()
+  }
+}
+
+pub(crate) struct BatchValue {
+  pub(crate) val: Option<Bytes>,
+  pub(crate) meta: Option<Meta>,
+  pub(crate) height: skl::u5,
+}
+
+impl BatchValue {
+  #[inline]
+  pub(crate) const fn new(val: Option<Bytes>) -> Self {
+    Self {
+      val,
+      meta: None,
+      height: u5::new(0),
+    }
+  }
+}
+
+/// A batch of key-value pairs.
+pub struct Batch {
+  pub(crate) pairs: BTreeMap<BatchKey, BatchValue>,
+  pub(crate) estimated_size: Option<usize>,
+}
+
+impl core::borrow::Borrow<[u8]> for BatchKey {
+  fn borrow(&self) -> &[u8] {
+    &self.0
+  }
+}
+
+impl Default for Batch {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl Batch {
+  /// Create a new write batch.
+  ///
+  /// # Example
+  ///
+  /// ```rust
+  /// use lemondb::db::Batch;
+  ///
+  /// let mut batch = Batch::new();
+  ///
+  /// batch.push_insert_operation(Bytes::from("key1"), Bytes::from("value1"));
+  /// batch.push_insert_operation(Bytes::from("key2"), Bytes::from("value2"));
+  ///
+  /// // which means the database should remove the key3, if this batch is written to the database
+  /// batch.push_remove_operation(Bytes::from("key3"));
+  ///
+  /// assert_eq!(batch.len(), 3);
+  ///
+  /// // remove one operation from the batch
+  /// batch.remove(b"key1");
+  /// assert_eq!(batch.len(), 2);
+  /// ```
+  pub const fn new() -> Self {
+    Self {
+      pairs: BTreeMap::new(),
+      estimated_size: None,
+    }
+  }
+
+  /// Inserts a key-value pair into the batch.
+  #[inline]
+  pub fn push_insert_operation(&mut self, key: Bytes, value: Bytes) {
+    self
+      .pairs
+      .insert(BatchKey(key), BatchValue::new(Some(value)));
+  }
+
+  /// Inserts a remove operation into the batch.
+  #[inline]
+  pub fn push_remove_operation(&mut self, key: Bytes) {
+    self.pairs.insert(BatchKey(key), BatchValue::new(None));
+  }
+
+  /// Removes an operation from the batch.
+  #[inline]
+  pub fn remove(&mut self, key: &[u8]) {
+    self.pairs.remove(key);
+  }
+
+  /// Returns the number of key-value pairs in the batch.
+  #[inline]
+  pub fn len(&self) -> usize {
+    self.pairs.len()
+  }
+
+  /// Returns `true` if the batch contains no key-value pairs.
+  #[inline]
+  pub fn is_empty(&self) -> bool {
+    self.pairs.is_empty()
+  }
+}
+
 enum Event {
   Write {
     table_id: TableId,
@@ -381,7 +546,7 @@ enum Event {
   },
   WriteBatch {
     table_id: TableId,
-    batch: Vec<(Bytes, Bytes)>,
+    batch: Batch,
     tx: oneshot::Sender<Result<(), Error>>,
   },
   Remove {
