@@ -924,8 +924,9 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     let encoded_entry_size =
       ValueLog::encoded_entry_size(meta.version(), key, val, meta.checksum());
 
-    let new_fid = self.fid_generator.increment();
-    let vlog = ValueLog::create(CreateOptions::new(new_fid).with_size(encoded_entry_size as u64))?;
+    let new_vlf_fid = self.fid_generator.increment();
+    let vlog =
+      ValueLog::create(CreateOptions::new(new_vlf_fid).with_size(encoded_entry_size as u64))?;
     let vp = vlog
       .write(meta.version(), key, val, meta.checksum())
       .map_err(|e| {
@@ -938,61 +939,101 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
     let vp_buf = &buf[..encoded_size];
 
-    // write new fid to manifest file
-    let mut manifest_file = self.manifest.lock_me();
-    manifest_file
-      .append(aol::Entry::creation_with_custom_flags(
-        CustomFlags::empty().with_bit1(),
-        ManifestRecord::log(new_fid, tid),
-      ))
-      .map_err(|e| {
-        if let Err(_e) = vlog.remove() {
-          #[cfg(feature = "tracing")]
-          tracing::error!(err=%_e, "failed to remove unregistered value log file");
-        }
+    let active_lf = self.lfs.back().expect("no active log file");
+    let active_lf = active_lf.value();
+    let height = active_lf.random_height();
+    let has_space = active_lf.has_space(height, key.len() as u32, vp_buf.len() as u32);
 
-        e.into()
-      })
-      .and_then(|_| {
-        let remove = |res: Error| {
+    if has_space {
+      // register value log file to manifest file
+      self
+        .manifest
+        .lock_me()
+        .append(aol::Entry::creation_with_custom_flags(
+          CustomFlags::empty().with_bit1(),
+          ManifestRecord::log(new_vlf_fid, tid),
+        ))
+        .map_err(|e| {
           if let Err(_e) = vlog.remove() {
             #[cfg(feature = "tracing")]
             tracing::error!(err=%_e, "failed to remove unregistered value log file");
           }
 
-          res
-        };
+          e
+        })?;
 
-        {
-          let active_lf = self.lfs.back().expect("no active log file");
-          match active_lf.value().insert(meta, key, vp_buf) {
-            Ok(_) => return Ok(()),
-            Err(LogFileError::Log(skl::map::Error::Arena(
-              skl::ArenaError::InsufficientSpace { .. },
-            ))) => {}
-            Err(e) => return Err(remove(e.into())),
+      // insert the key and value pointer to the active log file
+      return active_lf
+        .insert_at_height(meta, height, key, vp_buf)
+        .map(|_| ())
+        .map_err(|e| {
+          if let Err(_e) = vlog.remove() {
+            #[cfg(feature = "tracing")]
+            tracing::error!(err=%_e, "failed to remove unregistered value log file");
           }
+
+          e.into()
+        });
+    }
+
+    // log file does not have enough space, create a new log file
+    let new_lf_fid = self.fid_generator.increment();
+    let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_lf_fid));
+
+    match new_lf {
+      Err(e) => {
+        if let Err(_e) = vlog.remove() {
+          #[cfg(feature = "tracing")]
+          tracing::error!(err=%_e, "failed to remove unregistered value log file");
         }
 
-        let new_fid = self.fid_generator.increment();
-        let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))
-          .map_err(|e| remove(e.into()))?;
-        manifest_file
-          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))
-          .map_err(|e| remove(e.into()))?;
-        let res = new_lf.insert(meta, key, vp_buf);
+        Err(e.into())
+      }
+      Ok(new_lf) => {
+        // we successfully created a new log file
+        // now register the new value log file and new log file to manifest file
+        let res = self.manifest.lock_me().append_batch(vec![
+          aol::Entry::creation_with_custom_flags(
+            CustomFlags::empty().with_bit1(),
+            ManifestRecord::log(new_vlf_fid, tid),
+          ),
+          aol::Entry::creation(ManifestRecord::log(new_lf_fid, tid)),
+        ]);
 
         match res {
           Ok(_) => {
-            self.lfs.insert(new_fid, new_lf);
+            new_lf.insert(meta, key, vp_buf).map_err(|e| {
+              if let Err(_e) = vlog.remove() {
+                #[cfg(feature = "tracing")]
+                tracing::error!(err=%_e, "failed to remove unregistered value log file");
+              }
+
+              e
+            })?;
+
+            self.lfs.insert(new_lf_fid, new_lf);
+
             Ok(())
           }
           Err(e) => {
-            self.lfs.insert(new_fid, new_lf);
-            Err(remove(e.into()))
+            // if we failed to register the new value log file and new log file to manifest file
+            // then we need to remove the unregistered value log file and new log file to avoid intermediate state
+            if let Err(_e) = vlog.remove() {
+              #[cfg(feature = "tracing")]
+              tracing::error!(err=%_e, "failed to remove unregistered value log file");
+            }
+
+            // SAFETY: we just created the new log file, so it is safe to remove it
+            if let Err(_e) = unsafe { new_lf.remove_file() } {
+              #[cfg(feature = "tracing")]
+              tracing::error!(err=%_e, "failed to remove unregistered log file");
+            }
+
+            Err(e.into())
           }
         }
-      })
+      }
+    }
   }
 
   #[inline]
