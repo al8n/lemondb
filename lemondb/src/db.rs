@@ -460,7 +460,9 @@ impl BatchValue {
 /// A batch of key-value pairs.
 pub struct Batch {
   pub(crate) pairs: BTreeMap<BatchKey, BatchValue>,
+  pub(crate) entries_in_vlogs: usize,
   pub(crate) estimated_size: Option<usize>,
+  value_threshold: usize,
 }
 
 impl core::borrow::Borrow<[u8]> for BatchKey {
@@ -469,37 +471,13 @@ impl core::borrow::Borrow<[u8]> for BatchKey {
   }
 }
 
-impl Default for Batch {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
 impl Batch {
   /// Create a new write batch.
-  ///
-  /// # Example
-  ///
-  /// ```rust
-  /// use lemondb::db::Batch;
-  ///
-  /// let mut batch = Batch::new();
-  ///
-  /// batch.push_insert_operation(Bytes::from("key1"), Bytes::from("value1"));
-  /// batch.push_insert_operation(Bytes::from("key2"), Bytes::from("value2"));
-  ///
-  /// // which means the database should remove the key3, if this batch is written to the database
-  /// batch.push_remove_operation(Bytes::from("key3"));
-  ///
-  /// assert_eq!(batch.len(), 3);
-  ///
-  /// // remove one operation from the batch
-  /// batch.remove(b"key1");
-  /// assert_eq!(batch.len(), 2);
-  /// ```
-  pub const fn new() -> Self {
+  pub(crate) const fn new(value_threshold: usize, large_value_threshold: usize) -> Self {
     Self {
       pairs: BTreeMap::new(),
+      entries_in_vlogs: 0,
+      value_threshold,
       estimated_size: None,
     }
   }
@@ -507,6 +485,10 @@ impl Batch {
   /// Inserts a key-value pair into the batch.
   #[inline]
   pub fn push_insert_operation(&mut self, key: Bytes, value: Bytes) {
+    if value.len() > self.value_threshold {
+      self.entries_in_vlogs += 1;
+    }
+
     self
       .pairs
       .insert(BatchKey(key), BatchValue::new(Some(value)));
@@ -520,8 +502,21 @@ impl Batch {
 
   /// Removes an operation from the batch.
   #[inline]
-  pub fn remove(&mut self, key: &[u8]) {
-    self.pairs.remove(key);
+  pub fn remove(&mut self, key: &[u8]) -> Option<(Bytes, Option<Bytes>)> {
+    if let Some((k, v)) = self.pairs.remove_entry(key) {
+      return match v.val {
+        Some(val) => {
+          if val.len() > self.value_threshold {
+            self.entries_in_vlogs -= 1;
+          }
+
+          Some((k.0, Some(val)))
+        },
+        None => Some((k.0, None)),
+      };
+    }
+
+    None
   }
 
   /// Returns the number of key-value pairs in the batch.

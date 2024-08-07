@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use core::ops::Deref;
 
+use bytes::Bytes;
 use cache::ValueLogCache;
 use crossbeam_skiplist::{map::Entry as CMapEntry, SkipMap};
 use either::Either;
@@ -547,7 +549,6 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     let mut expected_log_size = 0;
     let mut expected_value_log_size = 0;
     let last = self.lfs.back().expect("no active log file");
-    let mut big_values = Vec::new();
     let lf = last.value();
 
     // Calculate the size information
@@ -557,21 +558,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         Some(val) => {
           let raw_val_size = val.len();
           if raw_val_size as u64 > self.opts.value_threshold {
-            if raw_val_size as u64 > self.opts.big_value_threshold {
-              let mut meta = Meta::big_value_pointer(version);
-              let cks = checksum(meta.raw(), k, Some(val));
-              meta.set_checksum(cks);
-              v.meta = Some(meta);
+            let mut meta = Meta::value_pointer(version);
+            let cks = checksum(meta.raw(), k, Some(val));
+            meta.set_checksum(cks);
+            v.meta = Some(meta);
 
-              big_values.push(k);
-            } else {
-              let mut meta = Meta::value_pointer(version);
-              let cks = checksum(meta.raw(), k, Some(val));
-              meta.set_checksum(cks);
-              v.meta = Some(meta);
-
-              expected_value_log_size += ValueLog::encoded_entry_size(version, k, val, cks);
-            }
+            expected_value_log_size += ValueLog::encoded_entry_size(version, k, val, cks);
 
             Pointer::MAX_ENCODING_SIZE
           } else {
@@ -600,13 +592,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
     // check if the current log file and value log file have enough space
 
-    // 1. some entries are inlined, and some entries need to be written to the standalone value log file
-    // no entries need to be written to the shared value log file.
+    // 1. all entries are inlined.
     if expected_value_log_size == 0 {
       let remaining = lf.map.remaining();
       // the current active log file does not have enough space
-      // create a new log file
-      if remaining < expected_log_size {
+      // so create a new log file
+      if remaining <= expected_log_size {
         let size = if expected_log_size as u64 > self.opts.log_size {
           expected_log_size as u64
         } else {
@@ -618,35 +609,96 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           self.cmp.clone(),
           self.opts.create_options(new_fid).with_size(size),
         )?;
-        self
-          .manifest
-          .lock_me()
-          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
 
+        // insert the entires to the unregistered log file first, so that if there is an error, we do not need
+        // to create new files for the big value entries
         let res = batch.pairs.iter().try_for_each(|(k, v)| {
           let meta = v.meta.unwrap();
           match &v.val {
-            Some(val) => new_lf.insert(meta, k, val).map(|_| ()),
+            Some(val) => new_lf.insert_at_height(meta, v.height, k, val).map(|_| ()),
             None => new_lf.remove(meta, k),
           }
         });
 
         return match res {
-          Ok(_) => {
-            self.lfs.insert(new_fid, new_lf);
-            Ok(())
-          }
           Err(e) => {
+            // if there is an error, we can still try to register the log file
             if let Err(_e) = new_lf.clear() {
               #[cfg(feature = "tracing")]
-              tracing::error!(err=%_e, "failed to clear log file");
+              tracing::error!(fid=%new_lf.fid(), err=%_e, "failed to clear log file");
+
+              // if we fail to clear the log file, we must remove it to avoid intermediate state
+              // Safety: we are the only one can access the log file
+              if let Err(_e) = unsafe { new_lf.remove_file() } {
+                #[cfg(feature = "tracing")]
+                tracing::error!(fid=%new_fid, err=%e, "failed to remove log file");
+              }
+
+              return Err(e.into());
             }
 
+            // try to register the log file
+            let res = self
+              .manifest
+              .lock_me()
+              .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)));
+
+            if let Err(_e) = res {
+              #[cfg(feature = "tracing")]
+              tracing::error!(fid=%new_fid, err=%_e, "failed to register log file");
+
+              // if we fail to register the log file, we must remove it to avoid intermediate state
+              // Safety: we are the only one can access the log file
+              if let Err(_e) = unsafe { new_lf.remove_file() } {
+                #[cfg(feature = "tracing")]
+                tracing::error!(fid=%new_fid, err=%_e, "failed to remove unregisted log file");
+              }
+
+              return Err(e.into());
+            }
+
+            // we successfully registered the log file, so update the current active log file
             self.lfs.insert(new_fid, new_lf);
+
             Err(e.into())
           }
-        };
+          Ok(_) => {
+            // if we reach here, which means all inlined entries are successfully written
+            // try to register the log file
+            let res = self
+              .manifest
+              .lock_me()
+              .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)));
+
+            match res {
+              Ok(_) => {
+                // we successfully registered the log file, so update the current active log file.
+                self.lfs.insert(new_fid, new_lf);
+                Ok(())
+              }
+              Err(e) => {
+                // if we fail to register the log file, we must remove it to avoid intermediate state
+                // Safety: we are the only one can access the log file
+                if let Err(_e) = unsafe { new_lf.remove_file() } {
+                  #[cfg(feature = "tracing")]
+                  tracing::error!(fid=%new_fid, err=%e, "failed to remove unregistered log file");
+                }
+
+                Err(e.into())
+              }
+            }
+          }
+        }
       }
+
+      // the current active log file has enough space
+      let res = batch.pairs.iter().try_for_each(|(k, v)| {
+        let meta = v.meta.unwrap();
+        match &v.val {
+          Some(val) => lf.allocate_at_height(meta, v.height, k, val).map(|_| ()),
+          None => lf.remove(meta, k),
+        }
+      });
     }
 
     // 2.
@@ -663,22 +715,13 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   ) -> Result<(), Error> {
     let val_len = val.len();
 
-    // First, check if the value is big enough to be written to a standalone value log file
-    if val_len as u64 >= self.opts.big_value_threshold {
-      let mut meta = Meta::big_value_pointer(version);
-      let cks = checksum(meta.raw(), key, Some(val));
-      meta.set_checksum(cks);
-
-      return self.insert_entry_to_standalone_vlog(tid, meta, key, val);
-    }
-
-    // Second, check if the value is big enough to be written to the shared value log file
+    // First, check if the value is big enough to be written to the value log file
     if val_len as u64 >= self.opts.value_threshold {
       let mut meta = Meta::value_pointer(version);
       let cks = checksum(meta.raw(), key, Some(val));
       meta.set_checksum(cks);
 
-      return self.insert_entry_to_shared_vlog(tid, meta, key, val);
+      return self.insert_entry_to_vlog(tid, meta, key, val);
     }
 
     let mut meta = Meta::new(version);
@@ -730,7 +773,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     }
   }
 
-  fn insert_entry_to_shared_vlog(
+  fn insert_entry_to_vlog(
     &mut self,
     tid: TableId,
     mut meta: Meta,
@@ -909,130 +952,6 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         }
       }
       Err(e) => Err(e.into()),
-    }
-  }
-
-  fn insert_entry_to_standalone_vlog(
-    &mut self,
-    tid: TableId,
-    mut meta: Meta,
-    key: &[u8],
-    val: &[u8],
-  ) -> Result<(), Error> {
-    meta.set_big_value_pointer();
-
-    let encoded_entry_size =
-      ValueLog::encoded_entry_size(meta.version(), key, val, meta.checksum());
-
-    let new_vlf_fid = self.fid_generator.increment();
-    let vlog =
-      ValueLog::create(CreateOptions::new(new_vlf_fid).with_size(encoded_entry_size as u64))?;
-    let vp = vlog
-      .write(meta.version(), key, val, meta.checksum())
-      .map_err(|e| {
-        let _ = vlog.remove();
-        e
-      })?;
-
-    let mut buf = [0; Pointer::MAX_ENCODING_SIZE];
-    // This will never fail because the buffer is big enough
-    let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
-    let vp_buf = &buf[..encoded_size];
-
-    let active_lf = self.lfs.back().expect("no active log file");
-    let active_lf = active_lf.value();
-    let height = active_lf.random_height();
-    let has_space = active_lf.has_space(height, key.len() as u32, vp_buf.len() as u32);
-
-    if has_space {
-      // register value log file to manifest file
-      self
-        .manifest
-        .lock_me()
-        .append(aol::Entry::creation_with_custom_flags(
-          CustomFlags::empty().with_bit1(),
-          ManifestRecord::log(new_vlf_fid, tid),
-        ))
-        .map_err(|e| {
-          if let Err(_e) = vlog.remove() {
-            #[cfg(feature = "tracing")]
-            tracing::error!(err=%_e, "failed to remove unregistered value log file");
-          }
-
-          e
-        })?;
-
-      // insert the key and value pointer to the active log file
-      return active_lf
-        .insert_at_height(meta, height, key, vp_buf)
-        .map(|_| ())
-        .map_err(|e| {
-          if let Err(_e) = vlog.remove() {
-            #[cfg(feature = "tracing")]
-            tracing::error!(err=%_e, "failed to remove unregistered value log file");
-          }
-
-          e.into()
-        });
-    }
-
-    // log file does not have enough space, create a new log file
-    let new_lf_fid = self.fid_generator.increment();
-    let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_lf_fid));
-
-    match new_lf {
-      Err(e) => {
-        if let Err(_e) = vlog.remove() {
-          #[cfg(feature = "tracing")]
-          tracing::error!(err=%_e, "failed to remove unregistered value log file");
-        }
-
-        Err(e.into())
-      }
-      Ok(new_lf) => {
-        // we successfully created a new log file
-        // now register the new value log file and new log file to manifest file
-        let res = self.manifest.lock_me().append_batch(vec![
-          aol::Entry::creation_with_custom_flags(
-            CustomFlags::empty().with_bit1(),
-            ManifestRecord::log(new_vlf_fid, tid),
-          ),
-          aol::Entry::creation(ManifestRecord::log(new_lf_fid, tid)),
-        ]);
-
-        match res {
-          Ok(_) => {
-            new_lf.insert(meta, key, vp_buf).map_err(|e| {
-              if let Err(_e) = vlog.remove() {
-                #[cfg(feature = "tracing")]
-                tracing::error!(err=%_e, "failed to remove unregistered value log file");
-              }
-
-              e
-            })?;
-
-            self.lfs.insert(new_lf_fid, new_lf);
-
-            Ok(())
-          }
-          Err(e) => {
-            // if we failed to register the new value log file and new log file to manifest file
-            // then we need to remove the unregistered value log file and new log file to avoid intermediate state
-            if let Err(_e) = vlog.remove() {
-              #[cfg(feature = "tracing")]
-              tracing::error!(err=%_e, "failed to remove unregistered value log file");
-            }
-
-            // SAFETY: we just created the new log file, so it is safe to remove it
-            if let Err(_e) = unsafe { new_lf.remove_file() } {
-              #[cfg(feature = "tracing")]
-              tracing::error!(err=%_e, "failed to remove unregistered log file");
-            }
-
-            Err(e.into())
-          }
-        }
-      }
     }
   }
 

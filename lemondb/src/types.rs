@@ -165,14 +165,14 @@ impl core::fmt::Display for Fid {
 /// The metadata is a 64-bit value with the following layout:
 ///
 /// ```text
-/// +---------------------+----------------------------------+------------------------------+----------------------+
-/// | 62 bits for version | 1 bit for big value pointer mark | 1 bit for value pointer mark | 32 bits for checksum |
-/// +---------------------+----------------------------------+------------------------------+----------------------+
+/// +---------------------+----------------------------------+----------------------+
+/// | 63 bits for version |   1 bit for value pointer mark   | 32 bits for checksum |
+/// +---------------------+----------------------------------+----------------------+
 /// ```
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(C, align(8))]
 pub(crate) struct Meta {
-  /// 62 bits for version, 1 bit for value pointer mark, and 1 bit for deletion flag.
+  /// 63 bits for version, 1 bit for value pointer mark
   meta: u64,
   cks: u32,
 }
@@ -195,14 +195,13 @@ unsafe impl Trailer for Meta {
 }
 
 impl Meta {
-  const VERSION_MASK: u64 = 0x3FFFFFFFFFFFFFFF; // 62 bits for version
-  const BIG_VALUE_POINTER_FLAG: u64 = 1 << 62; // 63rd bit for big value pointer mark
+  const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version 
   const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
 
   /// Create a new metadata with the given version.
   #[inline]
   pub const fn new(version: u64) -> Self {
-    assert!(version < (1 << 62), "version is too large");
+    assert!(version < (1 << 63), "version is too large");
 
     Self {
       meta: version,
@@ -213,21 +212,9 @@ impl Meta {
   /// Create a new metadata with the given version and value pointer flag.
   #[inline]
   pub const fn value_pointer(mut version: u64) -> Self {
-    assert!(version < (1 << 62), "version is too large");
+    assert!(version < (1 << 63), "version is too large");
 
     version |= Self::VALUE_POINTER_FLAG;
-    Self {
-      meta: version,
-      cks: 0,
-    }
-  }
-
-  /// Create a new metadata with the given version and big value pointer flag.
-  #[inline]
-  pub const fn big_value_pointer(mut version: u64) -> Self {
-    assert!(version < (1 << 62), "version is too large");
-
-    version |= Self::BIG_VALUE_POINTER_FLAG;
     Self {
       meta: version,
       cks: 0,
@@ -246,34 +233,16 @@ impl Meta {
     self.meta |= Self::VALUE_POINTER_FLAG;
   }
 
-  /// Set the big value pointer flag.
-  #[inline]
-  pub fn set_big_value_pointer(&mut self) {
-    self.meta |= Self::BIG_VALUE_POINTER_FLAG;
-  }
-
   /// Returns the checksum of the entry.
   #[inline]
   pub const fn checksum(&self) -> u32 {
     self.cks
   }
 
-  /// Returns `true` if the entry uses a big value pointer.
-  #[inline]
-  pub const fn is_big_value_pointer(&self) -> bool {
-    self.meta & Self::BIG_VALUE_POINTER_FLAG != 0
-  }
-
   /// Returns `true` if the value of the entry is a value pointer.
   #[inline]
-  pub const fn is_value_pointer(&self) -> bool {
-    self.meta & Self::VALUE_POINTER_FLAG != 0
-  }
-
-  /// Returns `true` if the value of the entry is a pointer.
-  #[inline]
   pub const fn is_pointer(&self) -> bool {
-    self.is_value_pointer() || self.is_big_value_pointer()
+    self.meta & Self::VALUE_POINTER_FLAG != 0
   }
 
   /// Returns the metadata as a raw 64-bit value.
@@ -304,14 +273,8 @@ impl<'a> VersionedEntryRef<'a> {
 
   /// Returns `true` if the value of the entry is a value pointer.
   #[inline]
-  pub const fn is_value_pointer(&self) -> bool {
-    self.ent.trailer().is_value_pointer()
-  }
-
-  /// Returns `true` if the value of the entry is a value pointer.
-  #[inline]
-  pub const fn is_big_value_pointer(&self) -> bool {
-    self.ent.trailer().is_big_value_pointer()
+  pub const fn is_pointer(&self) -> bool {
+    self.ent.trailer().is_pointer()
   }
 
   /// Returns `true` if the value of the entry is removed.
@@ -514,31 +477,24 @@ mod tests {
   fn test_meta() {
     let meta = Meta::new(0);
     assert_eq!(meta.version(), 0);
-    assert!(!meta.is_value_pointer());
-    assert!(!meta.is_big_value_pointer());
+    assert!(!meta.is_pointer());
 
     let meta = Meta::new(100);
     assert_eq!(meta.version(), 100);
-    assert!(!meta.is_value_pointer());
-    assert!(!meta.is_big_value_pointer());
+    assert!(!meta.is_pointer());
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 101, removed: true, pointer: false, checksum: 0 }"
+      "Meta { version: 101, pointer: false, checksum: 0 }"
     );
 
     let meta = Meta::value_pointer(102);
     assert_eq!(meta.version(), 102);
-    assert!(meta.is_value_pointer());
-
-    let meta = Meta::big_value_pointer(102);
-    assert_eq!(meta.version(), 102);
-    assert!(!meta.is_value_pointer());
-    assert!(meta.is_big_value_pointer());
+    assert!(meta.is_pointer());
 
     assert_eq!(
       format!("{:?}", meta),
-      "Meta { version: 102, removed: false, pointer: true, checksum: 0 }"
+      "Meta { version: 102, pointer: true, checksum: 0 }"
     );
   }
 }

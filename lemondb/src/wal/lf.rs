@@ -301,6 +301,21 @@ impl<C: Comparator> LogFile<C> {
       .map_err(LogFileError::Log)
   }
 
+  /// Allocates the given key and value to the log at the height.
+  #[inline]
+  pub fn allocate_at_height<'a, 'b: 'a>(
+    &'a self,
+    meta: Meta,
+    height: skl::u5,
+    key: &'b [u8],
+    value: &'b [u8],
+  ) -> Result<UnlinkedNode<'a, Meta>, LogFileError> {
+    self
+      .map
+      .allocate_at_height(meta, height, key, value)
+      .map_err(LogFileError::Log)
+  }
+
   /// Inserts a new key if it does not yet exist. Returns `Ok(())` if the key was successfully inserted.
   ///
   /// This method is useful when you want to insert a key and you know the value size but you do not have the value
