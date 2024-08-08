@@ -440,9 +440,17 @@ impl Ord for BatchKey {
   }
 }
 
+pub(crate) struct BatchValuePointer {
+  // used to store the index of value logs for a batch insertion
+  pub(crate) index: usize,
+  pub(crate) pointer: Pointer,
+  pub(crate) buf: [u8; Pointer::MAX_ENCODING_SIZE],
+}
+
 pub(crate) struct BatchValue {
   pub(crate) val: Option<Bytes>,
   pub(crate) meta: Option<Meta>,
+  pub(crate) pointer: Option<BatchValuePointer>,
   pub(crate) height: skl::u5,
 }
 
@@ -453,6 +461,7 @@ impl BatchValue {
       val,
       meta: None,
       height: u5::new(0),
+      pointer: None,
     }
   }
 }
@@ -473,7 +482,7 @@ impl core::borrow::Borrow<[u8]> for BatchKey {
 
 impl Batch {
   /// Create a new write batch.
-  pub(crate) const fn new(value_threshold: usize, large_value_threshold: usize) -> Self {
+  pub(crate) const fn new(value_threshold: usize) -> Self {
     Self {
       pairs: BTreeMap::new(),
       entries_in_vlogs: 0,
@@ -511,7 +520,7 @@ impl Batch {
           }
 
           Some((k.0, Some(val)))
-        },
+        }
         None => Some((k.0, None)),
       };
     }

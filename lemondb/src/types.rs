@@ -195,7 +195,7 @@ unsafe impl Trailer for Meta {
 }
 
 impl Meta {
-  const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version 
+  const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
   const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
 
   /// Create a new metadata with the given version.

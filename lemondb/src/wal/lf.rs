@@ -284,7 +284,7 @@ impl<C: Comparator> LogFile<C> {
   /// Returns if the log has space for the given key and value.
   #[inline]
   pub fn has_space(&self, height: skl::u5, key: u32, value: u32) -> bool {
-    self.map.remaining() >= self.map.estimated_node_size(height, key, value)
+    self.map.remaining() >= SkipMap::<Meta, C>::estimated_node_size(height, key, value)
   }
 
   /// Allocates the given key and value to the log.
@@ -369,6 +369,33 @@ impl<C: Comparator> LogFile<C> {
       .map
       .compare_remove(meta, key, Ordering::AcqRel, Ordering::Relaxed)
       .map(|_| ())
+      .map_err(Into::into)
+  }
+
+  #[inline]
+  pub(crate) fn remove_at_height(
+    &self,
+    meta: Meta,
+    height: skl::u5,
+    key: &[u8],
+  ) -> Result<(), LogFileError> {
+    self
+      .map
+      .compare_remove_at_height(meta, height, key, Ordering::AcqRel, Ordering::Relaxed)
+      .map(|_| ())
+      .map_err(Into::into)
+  }
+
+  #[inline]
+  pub(crate) fn allocate_remove_entry_at_height<'a, 'b: 'a>(
+    &'a self,
+    meta: Meta,
+    height: skl::u5,
+    key: &'b [u8],
+  ) -> Result<UnlinkedNode<'a, Meta>, LogFileError> {
+    self
+      .map
+      .allocate_remove_entry_at_height(meta, height, key)
       .map_err(Into::into)
   }
 
