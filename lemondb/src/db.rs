@@ -450,7 +450,7 @@ pub(crate) struct BatchValuePointer {
 pub(crate) struct BatchValue {
   pub(crate) val: Option<Bytes>,
   pub(crate) meta: Option<Meta>,
-  pub(crate) pointer: Option<BatchValuePointer>,
+  pub(crate) vp_buf: Option<[u8; Pointer::MAX_ENCODING_SIZE]>,
   pub(crate) height: skl::u5,
 }
 
@@ -461,7 +461,7 @@ impl BatchValue {
       val,
       meta: None,
       height: u5::new(0),
-      pointer: None,
+      vp_buf: None,
     }
   }
 }

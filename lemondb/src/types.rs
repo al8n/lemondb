@@ -377,6 +377,7 @@ impl core::fmt::Display for PointerError {
 impl std::error::Error for PointerError {}
 
 /// A pointer to the bytes in the log.
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Pointer {
   fid: Fid,
   size: u64,

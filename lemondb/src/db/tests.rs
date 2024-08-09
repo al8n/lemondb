@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn batch_ordering() {
-  let mut batch = Batch::new();
+  let mut batch = Batch::new(1);
 
   let k1 = Bytes::from_static(b"bc");
   let k2 = Bytes::from_static(b"abcdefg");

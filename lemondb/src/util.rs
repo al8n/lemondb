@@ -7,7 +7,6 @@ use crate::error::ChecksumMismatch;
 use core::iter::Iterator;
 use core::result::Result;
 
-
 pub(crate) trait TryMap<I: Iterator> {
   fn try_map<F, T, E>(self, f: F) -> TryMapIterator<Self, F>
   where
