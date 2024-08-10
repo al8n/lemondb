@@ -151,23 +151,30 @@ impl ValueLog {
     }
   }
 
-  pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
+  #[cfg(feature = "std")]
+  pub fn create<P: AsRef<std::path::Path>>(
+    path: P,
+    opts: CreateOptions,
+  ) -> Result<Self, ValueLogError> {
     Ok(Self {
-      kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::create(opts)?)),
+      kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::create(path, opts)?)),
     })
   }
 
   #[cfg(feature = "std")]
-  pub fn open(opts: OpenOptions) -> Result<Self, ValueLogError> {
+  pub fn open<P: AsRef<std::path::Path>>(
+    path: P,
+    opts: OpenOptions,
+  ) -> Result<Self, ValueLogError> {
     Ok(Self {
-      kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::open(opts)?)),
+      kind: UnsafeCell::new(ValueLogKind::Mmap(MmapValueLog::open(path, opts)?)),
     })
   }
 
   #[cfg(feature = "std")]
-  pub fn remove(&self) -> Result<(), ValueLogError> {
+  pub fn remove<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<(), ValueLogError> {
     match self.kind_mut() {
-      ValueLogKind::Mmap(vlf) => vlf.remove(),
+      ValueLogKind::Mmap(vlf) => vlf.remove(dir),
       ValueLogKind::MmapAnon(vlf) => vlf.remove(),
       ValueLogKind::Placeholder(_) => Ok(()),
     }

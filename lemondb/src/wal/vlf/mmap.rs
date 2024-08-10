@@ -1,5 +1,4 @@
-use core::ptr;
-use std::{fmt::Write, fs::File};
+use std::fs::File;
 
 use fs4::fs_std::FileExt;
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -47,16 +46,16 @@ pub struct MmapValueLog {
 
 impl MmapValueLog {
   #[inline]
-  pub fn create(opts: CreateOptions) -> Result<Self, ValueLogError> {
-    LOG_FILENAME_BUFFER.with(|buf| {
-      let mut buf = buf.borrow_mut();
-      buf.clear();
-      write!(buf, "{:020}.{}", opts.fid, VLOG_EXTENSION).unwrap();
+  pub fn create<P: AsRef<std::path::Path>>(
+    path: P,
+    opts: CreateOptions,
+  ) -> Result<Self, ValueLogError> {
+    with_filename(path, opts.fid, VLOG_EXTENSION, |path| {
       let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .open(buf.as_str())?;
+        .open(path)?;
 
       file.set_len(opts.size)?;
 
@@ -80,12 +79,12 @@ impl MmapValueLog {
     })
   }
 
-  pub fn open(opts: OpenOptions) -> Result<Self, ValueLogError> {
-    LOG_FILENAME_BUFFER.with(|buf| {
-      let mut buf = buf.borrow_mut();
-      buf.clear();
-      write!(buf, "{:020}.{}", opts.fid, VLOG_EXTENSION).unwrap();
-      let file = std::fs::OpenOptions::new().read(true).open(buf.as_str())?;
+  pub fn open<P: AsRef<std::path::Path>>(
+    path: P,
+    opts: OpenOptions,
+  ) -> Result<Self, ValueLogError> {
+    with_filename(path, opts.fid, VLOG_EXTENSION, |path| {
+      let file = std::fs::OpenOptions::new().read(true).open(path)?;
 
       if opts.lock {
         file.lock_exclusive()?;
@@ -204,12 +203,9 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub fn remove(&self) -> Result<(), ValueLogError> {
-    LOG_FILENAME_BUFFER.with(|buf| {
-      let mut buf = buf.borrow_mut();
-      buf.clear();
-      write!(buf, "{:020}.{}", self.fid, VLOG_EXTENSION).unwrap();
-      std::fs::remove_file(buf.as_str()).map_err(Into::into)
+  pub fn remove<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<(), ValueLogError> {
+    with_filename(dir, self.fid, VLOG_EXTENSION, |path| {
+      std::fs::remove_file(path).map_err(Into::into)
     })
   }
 }

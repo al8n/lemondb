@@ -80,7 +80,11 @@ impl<C> LogFile<C> {
 impl<C: Comparator> LogFile<C> {
   /// Create a new log with the given options.
   #[cfg(feature = "std")]
-  pub fn create(cmp: Arc<C>, opts: CreateOptions) -> Result<Self, LogFileError> {
+  pub fn create<P: AsRef<std::path::Path>>(
+    path: P,
+    cmp: Arc<C>,
+    opts: CreateOptions,
+  ) -> Result<Self, LogFileError> {
     use std::fmt::Write;
 
     if let Some(mode) = opts.in_memory {
@@ -114,15 +118,13 @@ impl<C: Comparator> LogFile<C> {
       });
     }
 
-    LOG_FILENAME_BUFFER.with_borrow_mut(|buf| {
-      buf.clear();
-      write!(buf, "{:020}.{}", opts.fid, LOG_EXTENSION).unwrap();
+    with_filename(path, opts.fid, LOG_EXTENSION, |path| {
       let open_opts = SklOpenOptions::new()
         .create_new(Some(opts.size as u32))
         .read(true)
         .write(true);
       SkipMap::<Meta, _>::map_mut_with_options_and_comparator(
-        buf.as_str(),
+        path,
         Options::new().with_magic_version(CURRENT_VERSION),
         open_opts,
         MmapOptions::new(),
@@ -172,15 +174,15 @@ impl<C: Comparator> LogFile<C> {
   /// **Note**: `LogFile` constructed with this method is read only.
   #[cfg(feature = "std")]
   #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  pub fn open(cmp: Arc<C>, opts: OpenOptions) -> Result<Self, LogFileError> {
-    use std::fmt::Write;
-
-    LOG_FILENAME_BUFFER.with_borrow_mut(|buf| {
-      buf.clear();
-      write!(buf, "{:020}.{}", opts.fid, LOG_EXTENSION).unwrap();
+  pub fn open<P: AsRef<std::path::Path>>(
+    path: P,
+    cmp: Arc<C>,
+    opts: OpenOptions,
+  ) -> Result<Self, LogFileError> {
+    with_filename(path, opts.fid, LOG_EXTENSION, |path| {
       let open_opts = SklOpenOptions::new().read(true);
       SkipMap::<Meta, _>::map_with_comparator(
-        buf.as_str(),
+        path,
         open_opts,
         MmapOptions::new(),
         cmp,
@@ -402,16 +404,14 @@ impl<C: Comparator> LogFile<C> {
   /// # Safety
   /// - must ensure that there is only one copy of the log file.
   #[inline]
-  pub(crate) unsafe fn remove_file(self) -> Result<(), LogFileError> {
+  pub(crate) unsafe fn remove_file<P: AsRef<std::path::Path>>(
+    self,
+    dir: P,
+  ) -> Result<(), LogFileError> {
     let fid = self.fid;
     drop(self);
-
-    LOG_FILENAME_BUFFER.with_borrow_mut(|buf| {
-      use std::fmt::Write;
-
-      buf.clear();
-      write!(buf, "{:020}.{}", fid, LOG_EXTENSION).unwrap();
-      std::fs::remove_file(buf.as_str()).map_err(Into::into)
+    with_filename(dir, fid, LOG_EXTENSION, |path| {
+      std::fs::remove_file(path).map_err(Into::into)
     })
   }
 

@@ -1,5 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+#[cfg(feature = "std")]
+use std::path::{Path, PathBuf};
+
 use cache::ValueLogCache;
 pub use skl::{u5, Ascend, Comparator, Descend};
 use wal::LazyEntryRef;
@@ -440,13 +443,6 @@ impl Ord for BatchKey {
   }
 }
 
-pub(crate) struct BatchValuePointer {
-  // used to store the index of value logs for a batch insertion
-  pub(crate) index: usize,
-  pub(crate) pointer: Pointer,
-  pub(crate) buf: [u8; Pointer::MAX_ENCODING_SIZE],
-}
-
 pub(crate) struct BatchValue {
   pub(crate) val: Option<Bytes>,
   pub(crate) meta: Option<Meta>,
@@ -470,7 +466,6 @@ impl BatchValue {
 pub struct Batch {
   pub(crate) pairs: BTreeMap<BatchKey, BatchValue>,
   pub(crate) entries_in_vlogs: usize,
-  pub(crate) estimated_size: Option<usize>,
   value_threshold: usize,
 }
 
@@ -487,7 +482,6 @@ impl Batch {
       pairs: BTreeMap::new(),
       entries_in_vlogs: 0,
       value_threshold,
-      estimated_size: None,
     }
   }
 
@@ -562,6 +556,10 @@ enum Event {
 
 /// Database
 pub struct Db<C = Ascend> {
+  #[cfg(feature = "std")]
+  dir: Arc<PathBuf>,
+  #[cfg(feature = "std")]
+  logs_dir: Arc<PathBuf>,
   fid_generator: Arc<AtomicFid>,
   manifest: Arc<Mutex<ManifestFile>>,
   tables: Mutex<HashMap<TableId, Table<C>>>,
@@ -630,11 +628,12 @@ impl Db {
         }
 
         let mut tables = self.tables.lock_me();
-        if tables.get(&table_manifest.id).is_some() {
+        if tables.contains_key(&table_manifest.id) {
           return Err(Error::TableAlreadyOpened(name));
         }
 
         let wal = Wal::open(
+          self.logs_dir.clone(),
           table_manifest,
           self.fid_generator.clone(),
           self.manifest.clone(),
@@ -682,6 +681,7 @@ impl Db {
         let next_fid = file.next_fid();
 
         let wal = Wal::create(
+          self.logs_dir.clone(),
           next_fid,
           self.fid_generator.clone(),
           self.manifest.clone(),

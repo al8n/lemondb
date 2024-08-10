@@ -1,7 +1,5 @@
-use core::ops::Deref;
-use std::{cell::RefCell, sync::Arc};
+use std::sync::Arc;
 
-use bytes::Bytes;
 use cache::ValueLogCache;
 use crossbeam_skiplist::{map::Entry as CMapEntry, SkipMap};
 use either::Either;
@@ -11,16 +9,10 @@ use manifest::{ManifestFile, ManifestRecord};
 use once_cell::unsync::OnceCell;
 
 use options::OpenOptions;
-use skl::{
-  map::{
-    Entry as MapEntry, EntryRef as MapEntryRef, VersionedEntry,
-    VersionedEntryRef as MapVersionedEntryRef,
-  },
-  Ascend, Trailer,
-};
+use skl::{map::VersionedEntry, Ascend, Trailer};
 
 use smallvec_wrapper::SmallVec;
-use util::TryMap;
+
 #[cfg(feature = "std")]
 pub(crate) use vlf::ValueLog;
 
@@ -154,6 +146,8 @@ enum LazyEntryKind {
 ///
 /// You can use the [`should_init`](#method.should_init) method to determine whether the entry needs to be initialized.
 pub struct LazyEntryRef<'a, C> {
+  #[cfg(feature = "std")]
+  dir: &'a std::path::Path,
   parent: CMapEntry<'a, Fid, LogFile<C>>,
   kind: LazyEntryKind,
 }
@@ -214,7 +208,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         ..
       } => {
         vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(*opts).map(Arc::new)?;
+          let vlog = ValueLog::open(&self.dir, *opts).map(Arc::new)?;
           if let Some(cache) = cache.as_ref() {
             cache.insert(pointer.fid(), vlog.clone());
           }
@@ -224,7 +218,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         let fid = pointer.fid();
 
         let vlog = vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(*opts).map(Arc::new)?;
+          let vlog = ValueLog::open(&self.dir, *opts).map(Arc::new)?;
           if let Some(cache) = cache.as_ref() {
             cache.insert(fid, vlog.clone());
           }
@@ -252,7 +246,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         ..
       } => {
         vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(*opts).map(Arc::new)?;
+          let vlog = ValueLog::open(self.dir, *opts).map(Arc::new)?;
           if let Some(cache) = cache.as_ref() {
             cache.insert(pointer.fid(), vlog.clone());
           }
@@ -266,8 +260,13 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
   }
 
   #[inline]
-  const fn from_inlined(ent: VersionedEntry<Meta>, parent: CMapEntry<'a, Fid, LogFile<C>>) -> Self {
+  const fn from_inlined(
+    #[cfg(feature = "std")] dir: &'a std::path::Path,
+    ent: VersionedEntry<Meta>,
+    parent: CMapEntry<'a, Fid, LogFile<C>>,
+  ) -> Self {
     Self {
+      dir,
       parent,
       kind: LazyEntryKind::Inlined(ent),
     }
@@ -275,12 +274,14 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
 
   #[inline]
   fn from_cache(
+    #[cfg(feature = "std")] dir: &'a std::path::Path,
     ent: VersionedEntry<Meta>,
     parent: CMapEntry<'a, Fid, LogFile<C>>,
     pointer: Pointer,
     vlog: Arc<ValueLog>,
   ) -> Self {
     Self {
+      dir,
       parent,
       kind: LazyEntryKind::Cached { ent, pointer, vlog },
     }
@@ -288,6 +289,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
 
   #[inline]
   fn from_pointer(
+    #[cfg(feature = "std")] dir: &'a std::path::Path,
     ent: VersionedEntry<Meta>,
     parent: CMapEntry<'a, Fid, LogFile<C>>,
     pointer: Pointer,
@@ -295,6 +297,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
     cache: Option<Arc<ValueLogCache>>,
   ) -> Self {
     Self {
+      dir,
       parent,
       kind: LazyEntryKind::Pointer {
         ent,
@@ -308,6 +311,8 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
 }
 
 pub(crate) struct Wal<C = Ascend> {
+  #[cfg(feature = "std")]
+  dir: Arc<std::path::PathBuf>,
   fid_generator: Arc<AtomicFid>,
 
   /// All of the log files.
@@ -330,6 +335,7 @@ pub(crate) struct Wal<C = Ascend> {
 impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   // TODO: support mmap anon and memory create
   pub(crate) fn create(
+    #[cfg(feature = "std")] dir: Arc<std::path::PathBuf>,
     fid: Fid,
     fid_generator: Arc<AtomicFid>,
     manifest: Arc<Mutex<ManifestFile>>,
@@ -341,6 +347,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     map.insert(
       fid,
       LogFile::create(
+        dir.as_path(),
         cmp.clone(),
         CreateOptions::new(fid)
           .with_size(opts.log_size)
@@ -349,6 +356,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     );
 
     Ok(Self {
+      dir,
       fid_generator,
       lfs: map,
       vlfs: SkipMap::new(),
@@ -361,6 +369,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   }
 
   pub(crate) fn open(
+    #[cfg(feature = "std")] dir: Arc<std::path::PathBuf>,
     table_manifest: &TableManifest,
     fid_generator: Arc<AtomicFid>,
     manifest: Arc<Mutex<ManifestFile>>,
@@ -369,19 +378,23 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   ) -> Result<Self, Error> {
     let lfs = SkipMap::new();
     for fid in table_manifest.logs.iter() {
-      let l = LogFile::open(cmp.clone(), opts.open_options(*fid))?;
+      let l = LogFile::open(dir.as_path(), cmp.clone(), opts.open_options(*fid))?;
       lfs.insert(*fid, l);
     }
 
     let vlfs = if let Some(fid) = table_manifest.vlogs.last() {
       let map = SkipMap::new();
-      map.insert(*fid, Arc::new(ValueLog::open(opts.open_options(*fid))?));
+      map.insert(
+        *fid,
+        Arc::new(ValueLog::open(dir.as_path(), opts.open_options(*fid))?),
+      );
       map
     } else {
       SkipMap::new()
     };
 
     Ok(Self {
+      dir,
       fid_generator,
       lfs,
       vlfs,
@@ -398,6 +411,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     version: u64,
     key: &'b [u8],
   ) -> Result<Option<EntryRef<'a, C>>, Error> {
+    let dir = self.dir.as_path();
     for file in self.lfs.iter().rev() {
       let lf = file.value();
 
@@ -419,12 +433,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               if let Some(vlog) = cache.get(&vp.fid()) {
                 EntryKind::from_pointer(vp, ent.to_owned(), vlog)
               } else {
-                let vlog = Arc::new(ValueLog::open(self.opts.open_options(vp.fid()))?);
+                let vlog = Arc::new(ValueLog::open(dir, self.opts.open_options(vp.fid()))?);
                 cache.insert(vp.fid(), vlog.clone());
                 EntryKind::from_pointer(vp, ent.to_owned(), vlog)
               }
             } else {
-              let vlog = Arc::new(ValueLog::open(self.opts.open_options(vp.fid()))?);
+              let vlog = Arc::new(ValueLog::open(dir, self.opts.open_options(vp.fid()))?);
               EntryKind::from_pointer(vp, ent.to_owned(), vlog)
             }
           } else {
@@ -446,6 +460,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     version: u64,
     key: &'b [u8],
   ) -> Result<Option<LazyEntryRef<'a, C>>, Error> {
+    let dir = self.dir.as_path();
     for file in self.lfs.iter().rev() {
       let lf = file.value();
 
@@ -466,9 +481,10 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
             if let Some(cache) = self.vcache.as_ref() {
               if let Some(vlog) = cache.get(&fid) {
-                LazyEntryRef::from_cache(ent.to_owned(), file, vp, vlog)
+                LazyEntryRef::from_cache(dir, ent.to_owned(), file, vp, vlog)
               } else {
                 LazyEntryRef::from_pointer(
+                  dir,
                   ent.to_owned(),
                   file,
                   vp,
@@ -478,6 +494,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               }
             } else {
               LazyEntryRef::from_pointer(
+                dir,
                 ent.to_owned(),
                 file,
                 vp,
@@ -486,7 +503,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               )
             }
           } else {
-            LazyEntryRef::from_inlined(ent.to_owned(), file)
+            LazyEntryRef::from_inlined(dir, ent.to_owned(), file)
           };
 
           return Ok(Some(ent));
@@ -532,7 +549,11 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     }
 
     let new_fid = self.fid_generator.increment();
-    let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))?;
+    let new_lf = LogFile::create(
+      self.dir.as_path(),
+      self.cmp.clone(),
+      self.opts.create_options(new_fid),
+    )?;
     self
       .manifest
       .lock_me()
@@ -587,7 +608,11 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     }
 
     let new_fid = self.fid_generator.increment();
-    let mut new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_fid))?;
+    let mut new_lf = LogFile::create(
+      self.dir.as_path(),
+      self.cmp.clone(),
+      self.opts.create_options(new_fid),
+    )?;
     self
       .manifest
       .lock_me()
@@ -616,6 +641,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     key: &[u8],
     val: &[u8],
   ) -> Result<(), Error> {
+    let dir = self.dir.as_path();
     meta.set_value_pointer();
 
     let mut buf = [0; Pointer::MAX_ENCODING_SIZE];
@@ -623,7 +649,10 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       Some(entry) => entry,
       None => {
         let new_fid = self.fid_generator.increment();
-        let vlog = ValueLog::create(CreateOptions::new(new_fid))?;
+        let vlog = ValueLog::create(
+          dir,
+          CreateOptions::new(new_fid).with_size(self.opts.vlog_size),
+        )?;
         self
           .manifest
           .lock_me()
@@ -655,11 +684,14 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       }
       Err(ValueLogError::NotEnoughSpace { .. }) => {
         let new_vlf_fid = self.fid_generator.increment();
-        let vlog = ValueLog::create(CreateOptions::new(new_vlf_fid))?;
+        let vlog = ValueLog::create(
+          dir,
+          CreateOptions::new(new_vlf_fid).with_size(self.opts.vlog_size),
+        )?;
         let vp = vlog
           .write(meta.version(), key, val, meta.checksum())
           .map_err(|e| {
-            let _ = vlog.remove();
+            let _ = vlog.remove(dir);
             e
           })?;
 
@@ -711,7 +743,14 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
         // log file does not have enough space, create a new log file
         let new_lf_fid = self.fid_generator.increment();
-        let new_lf = LogFile::create(self.cmp.clone(), self.opts.create_options(new_lf_fid));
+        let new_lf = LogFile::create(
+          dir,
+          self.cmp.clone(),
+          self
+            .opts
+            .create_options(new_lf_fid)
+            .with_size(self.opts.log_size),
+        );
 
         match new_lf {
           Err(e) => {
@@ -731,7 +770,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               .map_err(|e| {
                 // if we failed to register the new value log file to manifest file
                 // then we need to remove the unregistered value log file to avoid intermediate state
-                if let Err(_e) = vlog.remove() {
+                if let Err(_e) = vlog.remove(dir) {
                   #[cfg(feature = "tracing")]
                   tracing::error!(err=%_e, "failed to remove unregistered value log file");
                 }
@@ -770,13 +809,13 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               Err(e) => {
                 // if we failed to register the new value log file and new log file to manifest file
                 // then we need to remove the unregistered value log file and new log file to avoid intermediate state
-                if let Err(_e) = vlog.remove() {
+                if let Err(_e) = vlog.remove(dir) {
                   #[cfg(feature = "tracing")]
                   tracing::error!(err=%_e, "failed to remove unregistered value log file");
                 }
 
                 // SAFETY: we just created the new log file, so it is safe to remove it
-                if let Err(_e) = unsafe { new_lf.remove_file() } {
+                if let Err(_e) = unsafe { new_lf.remove_file(dir) } {
                   #[cfg(feature = "tracing")]
                   tracing::error!(err=%_e, "failed to remove unregistered log file");
                 }
@@ -823,6 +862,8 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       };
     }
 
+    let dir = self.dir.as_path();
+
     let last = self.lfs.back().expect("no active log file");
     let lf = last.value();
     let log_allocated = lf.map.allocated();
@@ -834,7 +875,10 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       Some(entry) => entry,
       None => {
         let new_fid = self.fid_generator.increment();
-        let vlog = ValueLog::create(CreateOptions::new(new_fid))?;
+        let vlog = ValueLog::create(
+          dir,
+          CreateOptions::new(new_fid).with_size(self.opts.vlog_size),
+        )?;
         self
           .manifest
           .lock_me()
@@ -872,6 +916,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                 ValueLogError::NotEnoughSpace { .. } => {
                   let new_vlog_fid = self.fid_generator.increment();
                   let new_vlog = ValueLog::create(
+                    dir,
                     CreateOptions::new(new_vlog_fid).with_size(self.opts.vlog_size),
                   )?;
                   vlogs.push(LogicalValueLog {
@@ -920,6 +965,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                   ))) => {
                     let fid = self.fid_generator.increment();
                     let new_lf = LogFile::create(
+                      dir,
                       self.cmp.clone(),
                       self.opts.create_options(fid).with_size(self.opts.log_size),
                     )?;
@@ -933,6 +979,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               } else {
                 let fid = self.fid_generator.increment();
                 let new_lf = LogFile::create(
+                  dir,
                   self.cmp.clone(),
                   self.opts.create_options(fid).with_size(self.opts.log_size),
                 )?;
@@ -950,6 +997,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                 ))) => {
                   let fid = self.fid_generator.increment();
                   let new_lf = LogFile::create(
+                    dir,
                     self.cmp.clone(),
                     self.opts.create_options(fid).with_size(self.opts.log_size),
                   )?;
@@ -976,6 +1024,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                   ))) => {
                     let fid = self.fid_generator.increment();
                     let new_lf = LogFile::create(
+                      dir,
                       self.cmp.clone(),
                       self.opts.create_options(fid).with_size(self.opts.log_size),
                     )?;
@@ -992,6 +1041,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               } else {
                 let fid = self.fid_generator.increment();
                 let new_lf = LogFile::create(
+                  dir,
                   self.cmp.clone(),
                   self.opts.create_options(fid).with_size(self.opts.log_size),
                 )?;
@@ -1012,6 +1062,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                 ))) => {
                   let fid = self.fid_generator.increment();
                   let new_lf = LogFile::create(
+                    dir,
                     self.cmp.clone(),
                     self.opts.create_options(fid).with_size(self.opts.log_size),
                   )?;
@@ -1048,6 +1099,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                   ))) => {
                     let fid = self.fid_generator.increment();
                     let new_lf = LogFile::create(
+                      dir,
                       self.cmp.clone(),
                       self.opts.create_options(fid).with_size(self.opts.log_size),
                     )?;
@@ -1064,6 +1116,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               } else {
                 let fid = self.fid_generator.increment();
                 let new_lf = LogFile::create(
+                  dir,
                   self.cmp.clone(),
                   self.opts.create_options(fid).with_size(self.opts.log_size),
                 )?;
@@ -1084,6 +1137,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
                 ))) => {
                   let fid = self.fid_generator.increment();
                   let new_lf = LogFile::create(
+                    dir,
                     self.cmp.clone(),
                     self.opts.create_options(fid).with_size(self.opts.log_size),
                   )?;
@@ -1107,12 +1161,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
     match res {
       Err(e) => {
-        cleanup_vlogs_on_failure(vlogs);
+        cleanup_vlogs_on_failure(dir, vlogs);
 
         // we have failure, so we need to cleanup
         drop(unlinked_nodes);
 
-        self.cleanup_logs_on_failure(tid, (log_allocated as u32, lf), new_logs);
+        self.cleanup_logs_on_failure(dir, tid, (log_allocated as u32, lf), new_logs);
 
         Err(e)
       }
@@ -1167,14 +1221,14 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           }
           Err(e) => {
             // cleanup the value log files
-            cleanup_vlogs_on_failure(vlogs);
+            cleanup_vlogs_on_failure(dir, vlogs);
 
             // fail to register value log files and log files
             // so we need to cleanup
             // the first one is the active log file
             drop(unlinked_nodes);
 
-            self.cleanup_logs_on_failure(tid, (log_allocated as u32, lf), new_logs);
+            self.cleanup_logs_on_failure(dir, tid, (log_allocated as u32, lf), new_logs);
 
             Err(e.into())
           }
@@ -1185,26 +1239,24 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
   fn cleanup_logs_on_failure(
     &self,
+    path: &std::path::Path,
     tid: TableId,
     (origin, lf): (u32, &LogFile<C>),
     new_logs: SmallVec<LogFile<C>>,
   ) {
     // SAFETY: we are the only one can access the log file, all the nodes are unlinked
     // so it is safe to rewind the allocator
-    unsafe {
-      lf.map
-        .rewind(skl::ArenaPosition::Start(origin))
-    };
-  
+    unsafe { lf.map.rewind(skl::ArenaPosition::Start(origin)) };
+
     let mut logs_iter = new_logs.into_iter();
-  
+
     // we try to register a new log file
     if let Some(ll) = logs_iter.next() {
       let res = self
         .manifest
         .lock_me()
         .append(aol::Entry::creation(ManifestRecord::log(ll.fid(), tid)));
-  
+
       match res {
         Ok(_) => {
           self.lfs.insert(ll.fid(), ll);
@@ -1216,8 +1268,8 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
         }
       }
     }
-  
-    cleanup_logs_on_failure(logs_iter);
+
+    cleanup_logs_on_failure(path, logs_iter);
   }
 }
 
@@ -1237,7 +1289,10 @@ impl<'a> core::ops::Deref for LogicalValueLog<'a> {
   }
 }
 
-fn cleanup_vlogs_on_failure(logical_vlogs: SmallVec<LogicalValueLog<'_>>) {
+fn cleanup_vlogs_on_failure<P: AsRef<std::path::Path>>(
+  dir: P,
+  logical_vlogs: SmallVec<LogicalValueLog<'_>>,
+) {
   // rewind or remove the value log file
   for lvl in logical_vlogs {
     match lvl.vlf {
@@ -1248,7 +1303,7 @@ fn cleanup_vlogs_on_failure(logical_vlogs: SmallVec<LogicalValueLog<'_>>) {
         }
       }
       Either::Right(vlf) => {
-        if let Err(_e) = vlf.remove() {
+        if let Err(_e) = vlf.remove(&dir) {
           #[cfg(feature = "tracing")]
           tracing::error!(fid = %vlf.fid(), err=%_e, "failed to remove unregistered value log file");
         }
@@ -1257,11 +1312,14 @@ fn cleanup_vlogs_on_failure(logical_vlogs: SmallVec<LogicalValueLog<'_>>) {
   }
 }
 
-fn cleanup_logs_on_failure<C: Comparator>(logs_iter: impl Iterator<Item = LogFile<C>>) {
+fn cleanup_logs_on_failure<P: AsRef<std::path::Path>, C: Comparator>(
+  dir: P,
+  logs_iter: impl Iterator<Item = LogFile<C>>,
+) {
   for ll in logs_iter {
     let fid = ll.fid();
     // SAFETY: we are the only one can access the log file
-    if let Err(_e) = unsafe { ll.remove_file() } {
+    if let Err(_e) = unsafe { ll.remove_file(&dir) } {
       #[cfg(feature = "tracing")]
       tracing::error!(fid = %fid, err=%_e, "failed to remove unregistered log file");
     }
