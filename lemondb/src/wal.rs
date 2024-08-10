@@ -542,531 +542,6 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
     Ok(())
   }
 
-  pub(crate) fn insert_batch(
-    &mut self,
-    tid: TableId,
-    version: u64,
-    mut batch: Batch,
-  ) -> Result<(), Error> {
-    if batch.len() == 1 {
-      let (k, v) = batch.pairs.pop_first().unwrap();
-      return match &v.val {
-        Some(val) => self.insert(tid, version, &k, val),
-        None => self.remove(tid, version, &k),
-      };
-    }
-
-    struct LogicalValueLog<'a> {
-      fid: Fid,
-      vlf: Either<(u64, &'a ValueLog), ValueLog>,
-    }
-
-    impl<'a> core::ops::Deref for LogicalValueLog<'a> {
-      type Target = ValueLog;
-
-      fn deref(&self) -> &Self::Target {
-        match &self.vlf {
-          Either::Left((_, vlf)) => vlf,
-          Either::Right(vlf) => vlf,
-        }
-      }
-    }
-
-    struct LogicalLog<COMP = Ascend> {
-      fid: Fid,
-      lf: LogFile<COMP>,
-    }
-
-    impl<COMP> core::ops::Deref for LogicalLog<COMP> {
-      type Target = LogFile<COMP>;
-
-      fn deref(&self) -> &Self::Target {
-        &self.lf
-      }
-    }
-
-    let last = self.lfs.back().expect("no active log file");
-    let lf = last.value();
-    let log_allocated = lf.map.allocated();
-    let mut current_lf: Either<&LogFile<C>, usize> = Either::Left(lf);
-    let mut new_logs = SmallVec::new();
-    let mut unlinked_nodes = SmallVec::new();
-
-    let active_vlf_entry = match self.vlfs.back() {
-      Some(entry) => entry,
-      None => {
-        let new_fid = self.fid_generator.increment();
-        let vlog = ValueLog::create(CreateOptions::new(new_fid))?;
-        self
-          .manifest
-          .lock_me()
-          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
-        self.vlfs.insert(new_fid, Arc::new(vlog));
-        self.vlfs.back().unwrap()
-      }
-    };
-
-    let active_vlf = active_vlf_entry.value();
-    let vlog_remaining = active_vlf.remaining();
-
-    let mut vlogs = SmallVec::new();
-    vlogs.push(LogicalValueLog {
-      fid: active_vlf.fid(),
-      vlf: Either::Left((vlog_remaining, active_vlf)),
-    });
-
-    // prepare
-    let res = batch.pairs.iter_mut().try_for_each(|(k, v)| {
-      let height = lf.map.random_height();
-      let (meta, val) = match &v.val {
-        Some(val) => {
-          let raw_val_size = val.len();
-          if raw_val_size as u64 > self.opts.value_threshold {
-            let mut meta = Meta::value_pointer(version);
-            let cks = checksum(meta.raw(), k, Some(val));
-            meta.set_checksum(cks);
-            v.meta = Some(meta);
-
-            let mut last_vlog = vlogs.last_mut().unwrap();
-
-            let vp = match last_vlog.write(version, k, val, meta.checksum()) {
-              Ok(vp) => vp,
-              Err(e) => match e {
-                ValueLogError::NotEnoughSpace { .. } => {
-                  let new_vlog_fid = self.fid_generator.increment();
-                  let new_vlog = ValueLog::create(
-                    CreateOptions::new(new_vlog_fid).with_size(self.opts.vlog_size),
-                  )?;
-                  vlogs.push(LogicalValueLog {
-                    fid: new_vlog_fid,
-                    vlf: Either::Right(new_vlog),
-                  });
-                  last_vlog = vlogs.last_mut().unwrap();
-                  last_vlog.write(version, k, val, meta.checksum())?
-                }
-                _ => return Err(Error::ValueLog(e)),
-              },
-            };
-
-            v.vp_buf = Some([0; Pointer::MAX_ENCODING_SIZE]);
-            (meta, Either::Right(vp))
-          } else {
-            let mut meta = Meta::new(version);
-            let cks = checksum(meta.raw(), k, Some(val));
-            meta.set_checksum(cks);
-            v.meta = Some(meta);
-
-            (meta, Either::Left(Some(val)))
-          }
-        }
-        None => {
-          let mut meta = Meta::new(version);
-          let cks = checksum(meta.raw(), k, None);
-          meta.set_checksum(cks);
-          v.meta = Some(meta);
-
-          (meta, Either::Left(None))
-        }
-      };
-      v.height = height;
-
-      match val {
-        Either::Left(None) => {
-          let need = skl::SkipMap::<Meta, C>::estimated_node_size(height, k.len() as u32, 0);
-          match current_lf {
-            Either::Left(active_lf) => {
-              if active_lf.map.remaining() >= need {
-                match active_lf.allocate_remove_entry_at_height(meta, height, k) {
-                  Ok(un) => unlinked_nodes.push(un),
-                  Err(LogFileError::Log(skl::map::Error::Arena(
-                    skl::ArenaError::InsufficientSpace { .. },
-                  ))) => {
-                    let fid = self.fid_generator.increment();
-                    let new_lf = LogFile::create(
-                      self.cmp.clone(),
-                      self.opts.create_options(fid).with_size(self.opts.log_size),
-                    )?;
-                    new_logs.push(LogicalLog { fid, lf: new_lf });
-
-                    new_logs.last().unwrap().remove_at_height(meta, height, k)?;
-                    current_lf = Either::Right(new_logs.len() - 1);
-                  }
-                  Err(e) => return Err(e.into()),
-                }
-              } else {
-                let fid = self.fid_generator.increment();
-                let new_lf = LogFile::create(
-                  self.cmp.clone(),
-                  self.opts.create_options(fid).with_size(self.opts.log_size),
-                )?;
-                new_logs.push(LogicalLog { fid, lf: new_lf });
-                new_logs.last().unwrap().remove_at_height(meta, height, k)?;
-                current_lf = Either::Right(new_logs.len() - 1);
-              }
-            }
-            Either::Right(idx) => {
-              let lf = &new_logs[idx];
-              match lf.remove_at_height(meta, height, k) {
-                Ok(_) => {}
-                Err(LogFileError::Log(skl::map::Error::Arena(
-                  skl::ArenaError::InsufficientSpace { .. },
-                ))) => {
-                  let fid = self.fid_generator.increment();
-                  let new_lf = LogFile::create(
-                    self.cmp.clone(),
-                    self.opts.create_options(fid).with_size(self.opts.log_size),
-                  )?;
-                  new_logs.push(LogicalLog { fid, lf: new_lf });
-
-                  new_logs.last().unwrap().remove_at_height(meta, height, k)?;
-                  current_lf = Either::Right(new_logs.len() - 1);
-                }
-                Err(e) => return Err(e.into()),
-              }
-            }
-          }
-        }
-        Either::Left(Some(val)) => {
-          let need =
-            skl::SkipMap::<Meta, C>::estimated_node_size(height, k.len() as u32, val.len() as u32);
-          match current_lf {
-            Either::Left(active_lf) => {
-              if active_lf.map.remaining() >= need {
-                match active_lf.allocate_at_height(meta, height, k, val) {
-                  Ok(un) => unlinked_nodes.push(un),
-                  Err(LogFileError::Log(skl::map::Error::Arena(
-                    skl::ArenaError::InsufficientSpace { .. },
-                  ))) => {
-                    let fid = self.fid_generator.increment();
-                    let new_lf = LogFile::create(
-                      self.cmp.clone(),
-                      self.opts.create_options(fid).with_size(self.opts.log_size),
-                    )?;
-                    new_logs.push(LogicalLog { fid, lf: new_lf });
-
-                    new_logs
-                      .last()
-                      .unwrap()
-                      .insert_at_height(meta, height, k, val)?;
-                    current_lf = Either::Right(new_logs.len() - 1);
-                  }
-                  Err(e) => return Err(e.into()),
-                }
-              } else {
-                let fid = self.fid_generator.increment();
-                let new_lf = LogFile::create(
-                  self.cmp.clone(),
-                  self.opts.create_options(fid).with_size(self.opts.log_size),
-                )?;
-                new_logs.push(LogicalLog { fid, lf: new_lf });
-                new_logs
-                  .last()
-                  .unwrap()
-                  .insert_at_height(meta, height, k, val)?;
-                current_lf = Either::Right(new_logs.len() - 1);
-              }
-            }
-            Either::Right(idx) => {
-              let lf = &new_logs[idx];
-              match lf.insert_at_height(meta, height, k, val) {
-                Ok(_) => {}
-                Err(LogFileError::Log(skl::map::Error::Arena(
-                  skl::ArenaError::InsufficientSpace { .. },
-                ))) => {
-                  let fid = self.fid_generator.increment();
-                  let new_lf = LogFile::create(
-                    self.cmp.clone(),
-                    self.opts.create_options(fid).with_size(self.opts.log_size),
-                  )?;
-                  new_logs.push(LogicalLog { fid, lf: new_lf });
-
-                  new_logs
-                    .last()
-                    .unwrap()
-                    .insert_at_height(meta, height, k, val)?;
-                  current_lf = Either::Right(new_logs.len() - 1);
-                }
-                Err(e) => return Err(e.into()),
-              }
-            }
-          }
-        }
-        Either::Right(vp) => {
-          let vp_buf = v.vp_buf.as_mut().unwrap();
-          let encoded_size = vp.encode(vp_buf).expect("failed to encode value pointer");
-          let need = skl::SkipMap::<Meta, C>::estimated_node_size(
-            height,
-            k.len() as u32,
-            encoded_size as u32,
-          );
-          let vp_buf = &vp_buf[..encoded_size];
-
-          match current_lf {
-            Either::Left(active_lf) => {
-              if active_lf.map.remaining() >= need {
-                match active_lf.allocate_at_height(meta, height, k, vp_buf) {
-                  Ok(un) => unlinked_nodes.push(un),
-                  Err(LogFileError::Log(skl::map::Error::Arena(
-                    skl::ArenaError::InsufficientSpace { .. },
-                  ))) => {
-                    let fid = self.fid_generator.increment();
-                    let new_lf = LogFile::create(
-                      self.cmp.clone(),
-                      self.opts.create_options(fid).with_size(self.opts.log_size),
-                    )?;
-                    new_logs.push(LogicalLog { fid, lf: new_lf });
-
-                    new_logs
-                      .last()
-                      .unwrap()
-                      .insert_at_height(meta, height, k, vp_buf)?;
-                    current_lf = Either::Right(new_logs.len() - 1);
-                  }
-                  Err(e) => return Err(e.into()),
-                }
-              } else {
-                let fid = self.fid_generator.increment();
-                let new_lf = LogFile::create(
-                  self.cmp.clone(),
-                  self.opts.create_options(fid).with_size(self.opts.log_size),
-                )?;
-                new_logs.push(LogicalLog { fid, lf: new_lf });
-                new_logs
-                  .last()
-                  .unwrap()
-                  .insert_at_height(meta, height, k, vp_buf)?;
-                current_lf = Either::Right(new_logs.len() - 1);
-              }
-            }
-            Either::Right(idx) => {
-              let lf = &new_logs[idx];
-              match lf.insert_at_height(meta, height, k, vp_buf) {
-                Ok(_) => {}
-                Err(LogFileError::Log(skl::map::Error::Arena(
-                  skl::ArenaError::InsufficientSpace { .. },
-                ))) => {
-                  let fid = self.fid_generator.increment();
-                  let new_lf = LogFile::create(
-                    self.cmp.clone(),
-                    self.opts.create_options(fid).with_size(self.opts.log_size),
-                  )?;
-                  new_logs.push(LogicalLog { fid, lf: new_lf });
-
-                  new_logs
-                    .last()
-                    .unwrap()
-                    .insert_at_height(meta, height, k, vp_buf)?;
-                  current_lf = Either::Right(new_logs.len() - 1);
-                }
-                Err(e) => return Err(e.into()),
-              }
-            }
-          }
-        }
-      }
-
-      Ok(())
-    });
-
-    // fn cleanup_vlogs_on_failure(logical_vlogs: SmallVec<LogicalValueLog<'_>>) {
-    //   // rewind or remove the value log file
-    //   for lvl in logical_vlogs {
-    //     match lvl.vlf {
-    //       Either::Left((original, vlf)) => {
-    //         if let Err(_e) = vlf.rewind(original as usize) {
-    //           #[cfg(feature = "tracing")]
-    //           tracing::error!(fid = %vlf.fid(), err=%_e, "failed to rewind value log file");
-    //         }
-    //       }
-    //       Either::Right(Some(vlf)) => {
-    //         if let Err(_e) = vlf.remove() {
-    //           #[cfg(feature = "tracing")]
-    //           tracing::error!(fid = %vlf.fid(), err=%_e, "failed to remove unregistered value log file");
-    //         }
-    //       }
-    //       Either::Right(None) => continue,
-    //     }
-    //   }
-    // }
-
-    match res {
-      Err(e) => {
-        // we have failure, so we need to cleanup
-        drop(unlinked_nodes);
-
-        // SAFETY: we are the only one can access the log file, all the nodes are unlinked
-        // so it is safe to rewind the allocator
-        unsafe {
-          lf.map
-            .rewind(skl::ArenaPosition::Start(log_allocated as u32))
-        };
-
-        let mut log_iter = new_logs.into_iter();
-
-        // we try to register a new log file
-        if let Some(ll) = log_iter.next() {
-          let res = self
-            .manifest
-            .lock_me()
-            .append(aol::Entry::creation(ManifestRecord::log(ll.fid, tid)));
-
-          match res {
-            Ok(_) => {
-              self.lfs.insert(ll.fid, ll.lf);
-
-              for ll in log_iter {
-                // SAFETY: we are the only one can access the log file
-                let fid = ll.fid();
-                if let Err(_e) = unsafe { ll.lf.remove_file() } {
-                  #[cfg(feature = "tracing")]
-                  tracing::error!(fid = %fid, err=%_e, "failed to remove unregistered log file");
-                }
-              }
-
-              return Err(e);
-            }
-            Err(me) => {
-              #[cfg(feature = "tracing")]
-              tracing::error!(fid = %ll.fid, err=%me, "failed to register log file");
-
-              for ll in log_iter {
-                let fid = ll.fid;
-                // SAFETY: we are the only one can access the log file
-                if let Err(_e) = unsafe { ll.lf.remove_file() } {
-                  #[cfg(feature = "tracing")]
-                  tracing::error!(fid = %fid, err=%_e, "failed to remove unregistered log file");
-                }
-              }
-              return Err(e);
-            }
-          }
-        }
-
-        for ll in log_iter {
-          // SAFETY: we are the only one can access the log file
-          if let Err(_e) = unsafe { ll.lf.remove_file() } {
-            #[cfg(feature = "tracing")]
-            tracing::error!(fid = %ll.fid, err=%_e, "failed to remove unregistered log file");
-          }
-        }
-
-        Err(e)
-      }
-      Ok(_) => {
-        // we do not have failure, so we can safely register the log files and value log files
-        let mut manifest_file = self.manifest.lock_me();
-        // TODO: update aol crate, avoid allocation here
-        let res = manifest_file.append_batch(
-          vlogs
-            .iter()
-            .skip(1)
-            .map(|lvl| {
-              aol::Entry::creation_with_custom_flags(
-                CustomFlags::empty().with_bit1(),
-                ManifestRecord::log(lvl.fid, tid),
-              )
-            })
-            .chain(
-              new_logs
-                .iter()
-                .skip(1)
-                .map(|ll| aol::Entry::creation(ManifestRecord::log(ll.fid, tid))),
-            )
-            .collect(),
-        );
-
-        match res {
-          // So happy! no errors
-          Ok(_) => {
-            // update the value log files and log files
-            vlogs.into_iter().skip(1).for_each(|lvl| match lvl.vlf {
-              Either::Right(vlf) => {
-                self.update_active_vlog(lvl.fid, vlf);
-              }
-              _ => unreachable!(),
-            });
-
-            // link the nodes to the log file
-            unlinked_nodes.into_iter().for_each(|node| {
-              // SAFETY: we know that the log file is not read-only
-              unsafe {
-                lf.map.link_unchecked(node);
-              }
-            });
-
-            // update the active log file
-            new_logs.into_iter().for_each(|ll| {
-              self.lfs.insert(ll.fid, ll.lf);
-            });
-
-            Ok(())
-          }
-          Err(e) => {
-            // fail to register value log files and log files
-            // so we need to cleanup
-            // the first one is the active log file
-            drop(unlinked_nodes);
-
-            // SAFETY: we are the only one can access the log file, all the nodes are unlinked
-            // so it is safe to rewind the allocator
-            unsafe {
-              lf.map
-                .rewind(skl::ArenaPosition::Start(log_allocated as u32))
-            };
-
-            let mut logs_iter = new_logs.into_iter();
-            // we try to register a new log file
-            if let Some(ll) = logs_iter.next() {
-              let res = self
-                .manifest
-                .lock_me()
-                .append(aol::Entry::creation(ManifestRecord::log(ll.fid, tid)));
-
-              match res {
-                Ok(_) => {
-                  self.lfs.insert(ll.fid, ll.lf);
-
-                  for ll in logs_iter {
-                    // SAFETY: we are the only one can access the log file
-                    if let Err(_e) = unsafe { ll.lf.remove_file() } {
-                      #[cfg(feature = "tracing")]
-                      tracing::error!(fid = %ll.fid, err=%_e, "failed to remove unregistered log file");
-                    }
-                  }
-
-                  return Err(e.into());
-                }
-                Err(me) => {
-                  #[cfg(feature = "tracing")]
-                  tracing::error!(fid = %ll.fid, err=%me, "failed to register log file");
-
-                  for ll in logs_iter {
-                    // SAFETY: we are the only one can access the log file
-                    if let Err(_e) = unsafe { ll.lf.remove_file() } {
-                      #[cfg(feature = "tracing")]
-                      tracing::error!(fid = %ll.fid, err=%_e, "failed to remove unregistered log file");
-                    }
-                  }
-                  return Err(e.into());
-                }
-              }
-            }
-
-            for ll in logs_iter {
-              // SAFETY: we are the only one can access the log file
-              if let Err(_e) = unsafe { ll.lf.remove_file() } {
-                #[cfg(feature = "tracing")]
-                tracing::error!(fid = %ll.fid, err=%_e, "failed to remove unregistered log file");
-              }
-            }
-
-            Err(e.into())
-          }
-        }
-      }
-    }
-  }
-
   pub(crate) fn insert(
     &mut self,
     tid: TableId,
@@ -1331,6 +806,464 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           }
         }
       }
+    }
+  }
+
+  pub(crate) fn insert_batch(
+    &mut self,
+    tid: TableId,
+    version: u64,
+    mut batch: Batch,
+  ) -> Result<(), Error> {
+    if batch.len() == 1 {
+      let (k, v) = batch.pairs.pop_first().unwrap();
+      return match &v.val {
+        Some(val) => self.insert(tid, version, &k, val),
+        None => self.remove(tid, version, &k),
+      };
+    }
+
+    let last = self.lfs.back().expect("no active log file");
+    let lf = last.value();
+    let log_allocated = lf.map.allocated();
+    let mut current_lf: Either<&LogFile<C>, usize> = Either::Left(lf);
+    let mut new_logs = SmallVec::new();
+    let mut unlinked_nodes = SmallVec::new();
+
+    let active_vlf_entry = match self.vlfs.back() {
+      Some(entry) => entry,
+      None => {
+        let new_fid = self.fid_generator.increment();
+        let vlog = ValueLog::create(CreateOptions::new(new_fid))?;
+        self
+          .manifest
+          .lock_me()
+          .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
+        self.vlfs.insert(new_fid, Arc::new(vlog));
+        self.vlfs.back().unwrap()
+      }
+    };
+
+    let active_vlf = active_vlf_entry.value();
+    let vlog_remaining = active_vlf.remaining();
+
+    let mut vlogs = SmallVec::new();
+    vlogs.push(LogicalValueLog {
+      fid: active_vlf.fid(),
+      vlf: Either::Left((vlog_remaining, active_vlf)),
+    });
+
+    let res = batch.pairs.iter_mut().try_for_each(|(k, v)| {
+      let height = lf.map.random_height();
+      let (meta, val) = match &v.val {
+        Some(val) => {
+          let raw_val_size = val.len();
+          if raw_val_size as u64 > self.opts.value_threshold {
+            let mut meta = Meta::value_pointer(version);
+            let cks = checksum(meta.raw(), k, Some(val));
+            meta.set_checksum(cks);
+            v.meta = Some(meta);
+
+            let mut last_vlog = vlogs.last_mut().unwrap();
+
+            let vp = match last_vlog.write(version, k, val, meta.checksum()) {
+              Ok(vp) => vp,
+              Err(e) => match e {
+                ValueLogError::NotEnoughSpace { .. } => {
+                  let new_vlog_fid = self.fid_generator.increment();
+                  let new_vlog = ValueLog::create(
+                    CreateOptions::new(new_vlog_fid).with_size(self.opts.vlog_size),
+                  )?;
+                  vlogs.push(LogicalValueLog {
+                    fid: new_vlog_fid,
+                    vlf: Either::Right(new_vlog),
+                  });
+                  last_vlog = vlogs.last_mut().unwrap();
+                  last_vlog.write(version, k, val, meta.checksum())?
+                }
+                _ => return Err(Error::ValueLog(e)),
+              },
+            };
+
+            v.vp_buf = Some([0; Pointer::MAX_ENCODING_SIZE]);
+            (meta, Either::Right(vp))
+          } else {
+            let mut meta = Meta::new(version);
+            let cks = checksum(meta.raw(), k, Some(val));
+            meta.set_checksum(cks);
+            v.meta = Some(meta);
+
+            (meta, Either::Left(Some(val)))
+          }
+        }
+        None => {
+          let mut meta = Meta::new(version);
+          let cks = checksum(meta.raw(), k, None);
+          meta.set_checksum(cks);
+          v.meta = Some(meta);
+
+          (meta, Either::Left(None))
+        }
+      };
+      v.height = height;
+
+      match val {
+        Either::Left(None) => {
+          let need = skl::SkipMap::<Meta, C>::estimated_node_size(height, k.len() as u32, 0);
+          match current_lf {
+            Either::Left(active_lf) => {
+              if active_lf.map.remaining() >= need {
+                match active_lf.allocate_remove_entry_at_height(meta, height, k) {
+                  Ok(un) => unlinked_nodes.push(un),
+                  Err(LogFileError::Log(skl::map::Error::Arena(
+                    skl::ArenaError::InsufficientSpace { .. },
+                  ))) => {
+                    let fid = self.fid_generator.increment();
+                    let new_lf = LogFile::create(
+                      self.cmp.clone(),
+                      self.opts.create_options(fid).with_size(self.opts.log_size),
+                    )?;
+                    new_logs.push(new_lf);
+
+                    new_logs.last().unwrap().remove_at_height(meta, height, k)?;
+                    current_lf = Either::Right(new_logs.len() - 1);
+                  }
+                  Err(e) => return Err(e.into()),
+                }
+              } else {
+                let fid = self.fid_generator.increment();
+                let new_lf = LogFile::create(
+                  self.cmp.clone(),
+                  self.opts.create_options(fid).with_size(self.opts.log_size),
+                )?;
+                new_logs.push(new_lf);
+                new_logs.last().unwrap().remove_at_height(meta, height, k)?;
+                current_lf = Either::Right(new_logs.len() - 1);
+              }
+            }
+            Either::Right(idx) => {
+              let lf = &new_logs[idx];
+              match lf.remove_at_height(meta, height, k) {
+                Ok(_) => {}
+                Err(LogFileError::Log(skl::map::Error::Arena(
+                  skl::ArenaError::InsufficientSpace { .. },
+                ))) => {
+                  let fid = self.fid_generator.increment();
+                  let new_lf = LogFile::create(
+                    self.cmp.clone(),
+                    self.opts.create_options(fid).with_size(self.opts.log_size),
+                  )?;
+                  new_logs.push(new_lf);
+
+                  new_logs.last().unwrap().remove_at_height(meta, height, k)?;
+                  current_lf = Either::Right(new_logs.len() - 1);
+                }
+                Err(e) => return Err(e.into()),
+              }
+            }
+          }
+        }
+        Either::Left(Some(val)) => {
+          let need =
+            skl::SkipMap::<Meta, C>::estimated_node_size(height, k.len() as u32, val.len() as u32);
+          match current_lf {
+            Either::Left(active_lf) => {
+              if active_lf.map.remaining() >= need {
+                match active_lf.allocate_at_height(meta, height, k, val) {
+                  Ok(un) => unlinked_nodes.push(un),
+                  Err(LogFileError::Log(skl::map::Error::Arena(
+                    skl::ArenaError::InsufficientSpace { .. },
+                  ))) => {
+                    let fid = self.fid_generator.increment();
+                    let new_lf = LogFile::create(
+                      self.cmp.clone(),
+                      self.opts.create_options(fid).with_size(self.opts.log_size),
+                    )?;
+                    new_logs.push(new_lf);
+
+                    new_logs
+                      .last()
+                      .unwrap()
+                      .insert_at_height(meta, height, k, val)?;
+                    current_lf = Either::Right(new_logs.len() - 1);
+                  }
+                  Err(e) => return Err(e.into()),
+                }
+              } else {
+                let fid = self.fid_generator.increment();
+                let new_lf = LogFile::create(
+                  self.cmp.clone(),
+                  self.opts.create_options(fid).with_size(self.opts.log_size),
+                )?;
+                new_logs.push(new_lf);
+                new_logs
+                  .last()
+                  .unwrap()
+                  .insert_at_height(meta, height, k, val)?;
+                current_lf = Either::Right(new_logs.len() - 1);
+              }
+            }
+            Either::Right(idx) => {
+              let lf = &new_logs[idx];
+              match lf.insert_at_height(meta, height, k, val) {
+                Ok(_) => {}
+                Err(LogFileError::Log(skl::map::Error::Arena(
+                  skl::ArenaError::InsufficientSpace { .. },
+                ))) => {
+                  let fid = self.fid_generator.increment();
+                  let new_lf = LogFile::create(
+                    self.cmp.clone(),
+                    self.opts.create_options(fid).with_size(self.opts.log_size),
+                  )?;
+                  new_logs.push(new_lf);
+
+                  new_logs
+                    .last()
+                    .unwrap()
+                    .insert_at_height(meta, height, k, val)?;
+                  current_lf = Either::Right(new_logs.len() - 1);
+                }
+                Err(e) => return Err(e.into()),
+              }
+            }
+          }
+        }
+        Either::Right(vp) => {
+          let vp_buf = v.vp_buf.as_mut().unwrap();
+          let encoded_size = vp.encode(vp_buf).expect("failed to encode value pointer");
+          let need = skl::SkipMap::<Meta, C>::estimated_node_size(
+            height,
+            k.len() as u32,
+            encoded_size as u32,
+          );
+          let vp_buf = &vp_buf[..encoded_size];
+
+          match current_lf {
+            Either::Left(active_lf) => {
+              if active_lf.map.remaining() >= need {
+                match active_lf.allocate_at_height(meta, height, k, vp_buf) {
+                  Ok(un) => unlinked_nodes.push(un),
+                  Err(LogFileError::Log(skl::map::Error::Arena(
+                    skl::ArenaError::InsufficientSpace { .. },
+                  ))) => {
+                    let fid = self.fid_generator.increment();
+                    let new_lf = LogFile::create(
+                      self.cmp.clone(),
+                      self.opts.create_options(fid).with_size(self.opts.log_size),
+                    )?;
+                    new_logs.push(new_lf);
+
+                    new_logs
+                      .last()
+                      .unwrap()
+                      .insert_at_height(meta, height, k, vp_buf)?;
+                    current_lf = Either::Right(new_logs.len() - 1);
+                  }
+                  Err(e) => return Err(e.into()),
+                }
+              } else {
+                let fid = self.fid_generator.increment();
+                let new_lf = LogFile::create(
+                  self.cmp.clone(),
+                  self.opts.create_options(fid).with_size(self.opts.log_size),
+                )?;
+                new_logs.push(new_lf);
+                new_logs
+                  .last()
+                  .unwrap()
+                  .insert_at_height(meta, height, k, vp_buf)?;
+                current_lf = Either::Right(new_logs.len() - 1);
+              }
+            }
+            Either::Right(idx) => {
+              let lf = &new_logs[idx];
+              match lf.insert_at_height(meta, height, k, vp_buf) {
+                Ok(_) => {}
+                Err(LogFileError::Log(skl::map::Error::Arena(
+                  skl::ArenaError::InsufficientSpace { .. },
+                ))) => {
+                  let fid = self.fid_generator.increment();
+                  let new_lf = LogFile::create(
+                    self.cmp.clone(),
+                    self.opts.create_options(fid).with_size(self.opts.log_size),
+                  )?;
+                  new_logs.push(new_lf);
+
+                  new_logs
+                    .last()
+                    .unwrap()
+                    .insert_at_height(meta, height, k, vp_buf)?;
+                  current_lf = Either::Right(new_logs.len() - 1);
+                }
+                Err(e) => return Err(e.into()),
+              }
+            }
+          }
+        }
+      }
+
+      Ok(())
+    });
+
+    match res {
+      Err(e) => {
+        cleanup_vlogs_on_failure(vlogs);
+
+        // we have failure, so we need to cleanup
+        drop(unlinked_nodes);
+
+        self.cleanup_logs_on_failure(tid, (log_allocated as u32, lf), new_logs);
+
+        Err(e)
+      }
+      Ok(_) => {
+        // we do not have failure, so we can safely register the log files and value log files
+        let mut manifest_file = self.manifest.lock_me();
+        // TODO: update aol crate, avoid allocation here
+        let res = manifest_file.append_batch(
+          vlogs
+            .iter()
+            .skip(1)
+            .map(|lvl| {
+              aol::Entry::creation_with_custom_flags(
+                CustomFlags::empty().with_bit1(),
+                ManifestRecord::log(lvl.fid, tid),
+              )
+            })
+            .chain(
+              new_logs
+                .iter()
+                .skip(1)
+                .map(|ll| aol::Entry::creation(ManifestRecord::log(ll.fid(), tid))),
+            )
+            .collect(),
+        );
+
+        match res {
+          // So happy! no errors
+          Ok(_) => {
+            // update the value log files and log files
+            vlogs.into_iter().skip(1).for_each(|lvl| match lvl.vlf {
+              Either::Right(vlf) => {
+                self.update_active_vlog(lvl.fid, vlf);
+              }
+              _ => unreachable!(),
+            });
+
+            // link the nodes to the log file
+            unlinked_nodes.into_iter().for_each(|node| {
+              // SAFETY: we know that the log file is not read-only
+              unsafe {
+                lf.map.link_unchecked(node);
+              }
+            });
+
+            // update the active log file
+            new_logs.into_iter().for_each(|ll| {
+              self.lfs.insert(ll.fid(), ll);
+            });
+
+            Ok(())
+          }
+          Err(e) => {
+            // cleanup the value log files
+            cleanup_vlogs_on_failure(vlogs);
+
+            // fail to register value log files and log files
+            // so we need to cleanup
+            // the first one is the active log file
+            drop(unlinked_nodes);
+
+            self.cleanup_logs_on_failure(tid, (log_allocated as u32, lf), new_logs);
+
+            Err(e.into())
+          }
+        }
+      }
+    }
+  }
+
+  fn cleanup_logs_on_failure(
+    &self,
+    tid: TableId,
+    (origin, lf): (u32, &LogFile<C>),
+    new_logs: SmallVec<LogFile<C>>,
+  ) {
+    // SAFETY: we are the only one can access the log file, all the nodes are unlinked
+    // so it is safe to rewind the allocator
+    unsafe {
+      lf.map
+        .rewind(skl::ArenaPosition::Start(origin))
+    };
+  
+    let mut logs_iter = new_logs.into_iter();
+  
+    // we try to register a new log file
+    if let Some(ll) = logs_iter.next() {
+      let res = self
+        .manifest
+        .lock_me()
+        .append(aol::Entry::creation(ManifestRecord::log(ll.fid(), tid)));
+  
+      match res {
+        Ok(_) => {
+          self.lfs.insert(ll.fid(), ll);
+        }
+        Err(me) => {
+          let fid = ll.fid();
+          #[cfg(feature = "tracing")]
+          tracing::error!(fid = %fid, err=%me, "failed to register log file");
+        }
+      }
+    }
+  
+    cleanup_logs_on_failure(logs_iter);
+  }
+}
+
+struct LogicalValueLog<'a> {
+  fid: Fid,
+  vlf: Either<(u64, &'a ValueLog), ValueLog>,
+}
+
+impl<'a> core::ops::Deref for LogicalValueLog<'a> {
+  type Target = ValueLog;
+
+  fn deref(&self) -> &Self::Target {
+    match &self.vlf {
+      Either::Left((_, vlf)) => vlf,
+      Either::Right(vlf) => vlf,
+    }
+  }
+}
+
+fn cleanup_vlogs_on_failure(logical_vlogs: SmallVec<LogicalValueLog<'_>>) {
+  // rewind or remove the value log file
+  for lvl in logical_vlogs {
+    match lvl.vlf {
+      Either::Left((original, vlf)) => {
+        if let Err(_e) = vlf.rewind(original as usize) {
+          #[cfg(feature = "tracing")]
+          tracing::error!(fid = %vlf.fid(), err=%_e, "failed to rewind value log file");
+        }
+      }
+      Either::Right(vlf) => {
+        if let Err(_e) = vlf.remove() {
+          #[cfg(feature = "tracing")]
+          tracing::error!(fid = %vlf.fid(), err=%_e, "failed to remove unregistered value log file");
+        }
+      }
+    }
+  }
+}
+
+fn cleanup_logs_on_failure<C: Comparator>(logs_iter: impl Iterator<Item = LogFile<C>>) {
+  for ll in logs_iter {
+    let fid = ll.fid();
+    // SAFETY: we are the only one can access the log file
+    if let Err(_e) = unsafe { ll.remove_file() } {
+      #[cfg(feature = "tracing")]
+      tracing::error!(fid = %fid, err=%_e, "failed to remove unregistered log file");
     }
   }
 }
