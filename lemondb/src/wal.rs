@@ -115,7 +115,7 @@ impl<'a, C> EntryRef<'a, C> {
   }
 }
 
-enum LazyEntryKind {
+enum LazyEntryKind<'a> {
   Inlined(VersionedEntry<Meta>),
   Cached {
     ent: VersionedEntry<Meta>,
@@ -123,6 +123,8 @@ enum LazyEntryKind {
     vlog: Arc<ValueLog>,
   },
   Pointer {
+    #[cfg(feature = "std")]
+    dir: &'a std::path::Path,
     ent: VersionedEntry<Meta>,
     pointer: Pointer,
     vlog: OnceCell<Arc<ValueLog>>,
@@ -146,10 +148,8 @@ enum LazyEntryKind {
 ///
 /// You can use the [`should_init`](#method.should_init) method to determine whether the entry needs to be initialized.
 pub struct LazyEntryRef<'a, C> {
-  #[cfg(feature = "std")]
-  dir: &'a std::path::Path,
   parent: CMapEntry<'a, Fid, LogFile<C>>,
-  kind: LazyEntryKind,
+  kind: LazyEntryKind<'a>,
 }
 
 impl<'a, C: Comparator> LazyEntryRef<'a, C> {
@@ -198,6 +198,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
           .unwrap(),
       ),
       LazyEntryKind::Pointer {
+        dir,
         vlog,
         pointer,
         cache,
@@ -205,7 +206,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         ..
       } => {
         vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(&self.dir, *opts).map(Arc::new)?;
+          let vlog = ValueLog::open(dir, *opts).map(Arc::new)?;
           if let Some(cache) = cache.as_ref() {
             cache.insert(pointer.fid(), vlog.clone());
           }
@@ -215,7 +216,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         let fid = pointer.fid();
 
         let vlog = vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(&self.dir, *opts).map(Arc::new)?;
+          let vlog = ValueLog::open(dir, *opts).map(Arc::new)?;
           if let Some(cache) = cache.as_ref() {
             cache.insert(fid, vlog.clone());
           }
@@ -236,6 +237,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
   pub fn init(&self) -> Result<(), Error> {
     match &self.kind {
       LazyEntryKind::Pointer {
+        dir,
         vlog,
         pointer,
         cache,
@@ -243,7 +245,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         ..
       } => {
         vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(self.dir, *opts).map(Arc::new)?;
+          let vlog = ValueLog::open(dir, *opts).map(Arc::new)?;
           if let Some(cache) = cache.as_ref() {
             cache.insert(pointer.fid(), vlog.clone());
           }
@@ -257,28 +259,21 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
   }
 
   #[inline]
-  const fn from_inlined(
-    #[cfg(feature = "std")] dir: &'a std::path::Path,
-    ent: VersionedEntry<Meta>,
-    parent: CMapEntry<'a, Fid, LogFile<C>>,
-  ) -> Self {
+  const fn from_inlined(ent: VersionedEntry<Meta>, parent: CMapEntry<'a, Fid, LogFile<C>>) -> Self {
     Self {
-      dir,
       parent,
       kind: LazyEntryKind::Inlined(ent),
     }
   }
 
   #[inline]
-  fn from_cache(
-    #[cfg(feature = "std")] dir: &'a std::path::Path,
+  fn from_owned_vlog(
     ent: VersionedEntry<Meta>,
     parent: CMapEntry<'a, Fid, LogFile<C>>,
     pointer: Pointer,
     vlog: Arc<ValueLog>,
   ) -> Self {
     Self {
-      dir,
       parent,
       kind: LazyEntryKind::Cached { ent, pointer, vlog },
     }
@@ -294,9 +289,10 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
     cache: Option<Arc<ValueLogCache>>,
   ) -> Self {
     Self {
-      dir,
       parent,
       kind: LazyEntryKind::Pointer {
+        #[cfg(feature = "std")]
+        dir,
         ent,
         pointer,
         vlog: OnceCell::new(),
@@ -425,8 +421,9 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           let ent = if ent.trailer().is_pointer() {
             let vp_buf = ent.value().unwrap();
             let (_, vp) = Pointer::decode(vp_buf)?;
-
-            if let Some(cache) = self.vcache.as_ref() {
+            if let Some(vlog_ent) = self.vlfs.get(&vp.fid()) {
+              EntryKind::from_pointer(vp, ent.to_owned(), vlog_ent.value().clone())
+            } else if let Some(cache) = self.vcache.as_ref() {
               if let Some(vlog) = cache.get(&vp.fid()) {
                 EntryKind::from_pointer(vp, ent.to_owned(), vlog)
               } else {
@@ -476,11 +473,14 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
             let (_, vp) = Pointer::decode(vp_buf)?;
             let fid = vp.fid();
 
-            if let Some(cache) = self.vcache.as_ref() {
+            if let Some(vlog_ent) = self.vlfs.get(&fid) {
+              LazyEntryRef::from_owned_vlog(ent.to_owned(), file, vp, vlog_ent.value().clone())
+            } else if let Some(cache) = self.vcache.as_ref() {
               if let Some(vlog) = cache.get(&fid) {
-                LazyEntryRef::from_cache(dir, ent.to_owned(), file, vp, vlog)
+                LazyEntryRef::from_owned_vlog(ent.to_owned(), file, vp, vlog)
               } else {
                 LazyEntryRef::from_pointer(
+                  #[cfg(feature = "std")]
                   dir,
                   ent.to_owned(),
                   file,
@@ -491,6 +491,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               }
             } else {
               LazyEntryRef::from_pointer(
+                #[cfg(feature = "std")]
                 dir,
                 ent.to_owned(),
                 file,
@@ -500,7 +501,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               )
             }
           } else {
-            LazyEntryRef::from_inlined(dir, ent.to_owned(), file)
+            LazyEntryRef::from_inlined(ent.to_owned(), file)
           };
 
           return Ok(Some(ent));
@@ -686,16 +687,16 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           CreateOptions::new(new_vlf_fid).with_size(self.opts.vlog_size),
         )?;
         let vp = match vlog.write(meta.version(), key, val, meta.checksum()) {
-            Ok(vp) => vp,
-            Err(e) => {
-              let _fid = vlog.fid();
-              if let Err(_e) = vlog.remove() {
-                #[cfg(feature = "tracing")]
-                tracing::error!(fid=%_fid, err=%_e, "failed to remove unregistered value log file");
-              }
-              return Err(e.into());
+          Ok(vp) => vp,
+          Err(e) => {
+            let _fid = vlog.fid();
+            if let Err(_e) = vlog.remove() {
+              #[cfg(feature = "tracing")]
+              tracing::error!(fid=%_fid, err=%_e, "failed to remove unregistered value log file");
             }
-          };
+            return Err(e.into());
+          }
+        };
 
         // This will never fail because the buffer is big enough
         let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
@@ -768,12 +769,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               Ok(_) => {
                 // register new value log file to manifest file
                 match self
-                .manifest
-                .lock_me()
-                .append(aol::Entry::creation_with_custom_flags(
-                  CustomFlags::empty().with_bit1(),
-                  ManifestRecord::log(new_vlf_fid, tid),
-                )) {
+                  .manifest
+                  .lock_me()
+                  .append(aol::Entry::creation_with_custom_flags(
+                    CustomFlags::empty().with_bit1(),
+                    ManifestRecord::log(new_vlf_fid, tid),
+                  )) {
                   Ok(_) => {
                     // update the current value log file
                     self.update_active_vlog(new_vlf_fid, vlog);
@@ -793,7 +794,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
                 Err(e.into())
               }
-            }
+            };
           }
           Ok(new_lf) => {
             // we successfully created a new log file
