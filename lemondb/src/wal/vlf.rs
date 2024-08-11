@@ -172,10 +172,10 @@ impl ValueLog {
   }
 
   #[cfg(feature = "std")]
-  pub fn remove<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<(), ValueLogError> {
-    match self.kind_mut() {
-      ValueLogKind::Mmap(vlf) => vlf.remove(dir),
-      ValueLogKind::MmapAnon(vlf) => vlf.remove(),
+  pub fn remove(self) -> Result<(), ValueLogError> {
+    match self.kind.into_inner() {
+      ValueLogKind::Mmap(vlf) => vlf.remove(),
+      ValueLogKind::MmapAnon(mut vlf) => vlf.remove(),
       ValueLogKind::Placeholder(_) => Ok(()),
     }
   }

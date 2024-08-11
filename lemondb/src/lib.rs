@@ -49,32 +49,24 @@ const LOG_EXTENSION: &str = "slog";
 // 20 digits + 1 dot + 4 extension
 const MAX_FILENAME_SUFFIX_LEN: usize = 4 + MAX_DIGITS + 1;
 
-std::thread_local! {
-  static LOG_FILENAME_BUFFER: core::cell::RefCell<Option<(std::path::PathBuf, std::path::PathBuf)>> = core::cell::RefCell::new(None);
-}
-
-fn with_filename<P, F, R>(path: P, fid: Fid, ext: &str, f: F) -> R
+fn filename<P>(path: P, fid: Fid, ext: &str) -> std::path::PathBuf
 where
   P: AsRef<std::path::Path>,
-  F: FnOnce(&std::path::PathBuf) -> R,
 {
   use std::fmt::Write;
 
-  LOG_FILENAME_BUFFER.with_borrow_mut(|pb| {
-    let (prefix, full_path) = pb.get_or_insert_with(|| {
-      let path = path.as_ref().to_path_buf();
-      let cap = path.as_os_str().len() + MAX_FILENAME_SUFFIX_LEN;
-      (path, std::path::PathBuf::with_capacity(cap))
-    });
+  let mut path = path.as_ref().to_path_buf();
+  path.reserve_exact(MAX_FILENAME_SUFFIX_LEN + 1);
+  write!(
+    path.as_mut_os_string(),
+    "{}{:020}.{}",
+    std::path::MAIN_SEPARATOR_STR,
+    fid,
+    ext
+  )
+  .unwrap();
 
-    full_path.clear();
-    full_path.as_mut_os_string().push(prefix.as_os_str());
-    full_path.push(std::path::MAIN_SEPARATOR_STR);
-
-    write!(full_path.as_mut_os_string(), "{:020}.{}", fid, ext).unwrap();
-
-    f(full_path)
-  })
+  path
 }
 
 trait Mu {

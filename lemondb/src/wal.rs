@@ -166,10 +166,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
   /// Returns `true` if this entry needs to be initialized before accessing the value.
   #[inline]
   pub fn should_init(&self) -> bool {
-    match &self.kind {
-      LazyEntryKind::Pointer { .. } => true,
-      _ => false,
-    }
+    matches!(&self.kind, LazyEntryKind::Pointer { .. })
   }
 
   /// Returns the value of the entry.
@@ -688,12 +685,17 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           dir,
           CreateOptions::new(new_vlf_fid).with_size(self.opts.vlog_size),
         )?;
-        let vp = vlog
-          .write(meta.version(), key, val, meta.checksum())
-          .map_err(|e| {
-            let _ = vlog.remove(dir);
-            e
-          })?;
+        let vp = match vlog.write(meta.version(), key, val, meta.checksum()) {
+            Ok(vp) => vp,
+            Err(e) => {
+              let _fid = vlog.fid();
+              if let Err(_e) = vlog.remove() {
+                #[cfg(feature = "tracing")]
+                tracing::error!(fid=%_fid, err=%_e, "failed to remove unregistered value log file");
+              }
+              return Err(e.into());
+            }
+          };
 
         // This will never fail because the buffer is big enough
         let encoded_size = vp.encode(&mut buf).expect("failed to encode value pointer");
@@ -757,31 +759,41 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
             // we failed to create a new log file,
             // but we can still update the active value log file
             // rewind the value log file first
-            let res = rewind(e.into(), &vlog);
+            return match vlog.rewind(0) {
+              Err(e) => {
+                #[cfg(feature = "tracing")]
+                tracing::error!(err=%e, "failed to rewind value log file");
+                Err(e.into())
+              }
+              Ok(_) => {
+                // register new value log file to manifest file
+                match self
+                .manifest
+                .lock_me()
+                .append(aol::Entry::creation_with_custom_flags(
+                  CustomFlags::empty().with_bit1(),
+                  ManifestRecord::log(new_vlf_fid, tid),
+                )) {
+                  Ok(_) => {
+                    // update the current value log file
+                    self.update_active_vlog(new_vlf_fid, vlog);
+                  }
+                  Err(_me) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::error!(err=%_me, "failed to register new value log file to manifest file");
 
-            // register new value log file to manifest file
-            self
-              .manifest
-              .lock_me()
-              .append(aol::Entry::creation_with_custom_flags(
-                CustomFlags::empty().with_bit1(),
-                ManifestRecord::log(new_vlf_fid, tid),
-              ))
-              .map_err(|e| {
-                // if we failed to register the new value log file to manifest file
-                // then we need to remove the unregistered value log file to avoid intermediate state
-                if let Err(_e) = vlog.remove(dir) {
-                  #[cfg(feature = "tracing")]
-                  tracing::error!(err=%_e, "failed to remove unregistered value log file");
+                    // if we failed to register the new value log file to manifest file
+                    // then we need to remove the unregistered value log file to avoid intermediate state
+                    if let Err(_e) = vlog.remove() {
+                      #[cfg(feature = "tracing")]
+                      tracing::error!(err=%_e, "failed to remove unregistered value log file");
+                    }
+                  }
                 }
 
-                e
-              })?;
-
-            // update the current value log file
-            self.update_active_vlog(new_vlf_fid, vlog);
-
-            Err(res)
+                Err(e.into())
+              }
+            }
           }
           Ok(new_lf) => {
             // we successfully created a new log file
@@ -809,13 +821,13 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               Err(e) => {
                 // if we failed to register the new value log file and new log file to manifest file
                 // then we need to remove the unregistered value log file and new log file to avoid intermediate state
-                if let Err(_e) = vlog.remove(dir) {
+                if let Err(_e) = vlog.remove() {
                   #[cfg(feature = "tracing")]
                   tracing::error!(err=%_e, "failed to remove unregistered value log file");
                 }
 
                 // SAFETY: we just created the new log file, so it is safe to remove it
-                if let Err(_e) = unsafe { new_lf.remove_file(dir) } {
+                if let Err(_e) = unsafe { new_lf.remove_file() } {
                   #[cfg(feature = "tracing")]
                   tracing::error!(err=%_e, "failed to remove unregistered log file");
                 }
@@ -1161,12 +1173,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
     match res {
       Err(e) => {
-        cleanup_vlogs_on_failure(dir, vlogs);
+        cleanup_vlogs_on_failure(vlogs);
 
         // we have failure, so we need to cleanup
         drop(unlinked_nodes);
 
-        self.cleanup_logs_on_failure(dir, tid, (log_allocated as u32, lf), new_logs);
+        self.cleanup_logs_on_failure(tid, (log_allocated as u32, lf), new_logs);
 
         Err(e)
       }
@@ -1221,14 +1233,14 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           }
           Err(e) => {
             // cleanup the value log files
-            cleanup_vlogs_on_failure(dir, vlogs);
+            cleanup_vlogs_on_failure(vlogs);
 
             // fail to register value log files and log files
             // so we need to cleanup
             // the first one is the active log file
             drop(unlinked_nodes);
 
-            self.cleanup_logs_on_failure(dir, tid, (log_allocated as u32, lf), new_logs);
+            self.cleanup_logs_on_failure(tid, (log_allocated as u32, lf), new_logs);
 
             Err(e.into())
           }
@@ -1239,7 +1251,6 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
 
   fn cleanup_logs_on_failure(
     &self,
-    path: &std::path::Path,
     tid: TableId,
     (origin, lf): (u32, &LogFile<C>),
     new_logs: SmallVec<LogFile<C>>,
@@ -1269,7 +1280,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       }
     }
 
-    cleanup_logs_on_failure(path, logs_iter);
+    cleanup_logs_on_failure(logs_iter);
   }
 }
 
@@ -1289,10 +1300,7 @@ impl<'a> core::ops::Deref for LogicalValueLog<'a> {
   }
 }
 
-fn cleanup_vlogs_on_failure<P: AsRef<std::path::Path>>(
-  dir: P,
-  logical_vlogs: SmallVec<LogicalValueLog<'_>>,
-) {
+fn cleanup_vlogs_on_failure(logical_vlogs: SmallVec<LogicalValueLog<'_>>) {
   // rewind or remove the value log file
   for lvl in logical_vlogs {
     match lvl.vlf {
@@ -1303,23 +1311,21 @@ fn cleanup_vlogs_on_failure<P: AsRef<std::path::Path>>(
         }
       }
       Either::Right(vlf) => {
-        if let Err(_e) = vlf.remove(&dir) {
+        let fid = vlf.fid();
+        if let Err(_e) = vlf.remove() {
           #[cfg(feature = "tracing")]
-          tracing::error!(fid = %vlf.fid(), err=%_e, "failed to remove unregistered value log file");
+          tracing::error!(fid = %fid, err=%_e, "failed to remove unregistered value log file");
         }
       }
     }
   }
 }
 
-fn cleanup_logs_on_failure<P: AsRef<std::path::Path>, C: Comparator>(
-  dir: P,
-  logs_iter: impl Iterator<Item = LogFile<C>>,
-) {
+fn cleanup_logs_on_failure<C: Comparator>(logs_iter: impl Iterator<Item = LogFile<C>>) {
   for ll in logs_iter {
     let fid = ll.fid();
     // SAFETY: we are the only one can access the log file
-    if let Err(_e) = unsafe { ll.remove_file(&dir) } {
+    if let Err(_e) = unsafe { ll.remove_file() } {
       #[cfg(feature = "tracing")]
       tracing::error!(fid = %fid, err=%_e, "failed to remove unregistered log file");
     }

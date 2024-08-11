@@ -81,12 +81,10 @@ impl<C: Comparator> LogFile<C> {
   /// Create a new log with the given options.
   #[cfg(feature = "std")]
   pub fn create<P: AsRef<std::path::Path>>(
-    path: P,
+    dir: P,
     cmp: Arc<C>,
     opts: CreateOptions,
   ) -> Result<Self, LogFileError> {
-    use std::fmt::Write;
-
     if let Some(mode) = opts.in_memory {
       let res = match mode {
         MemoryMode::Memory => SkipMap::<Meta, _>::with_options_and_comparator(
@@ -118,34 +116,35 @@ impl<C: Comparator> LogFile<C> {
       });
     }
 
-    with_filename(path, opts.fid, LOG_EXTENSION, |path| {
-      let open_opts = SklOpenOptions::new()
-        .create_new(Some(opts.size as u32))
-        .read(true)
-        .write(true);
-      SkipMap::<Meta, _>::map_mut_with_options_and_comparator(
-        path,
-        Options::new().with_magic_version(CURRENT_VERSION),
-        open_opts,
-        MmapOptions::new(),
-        cmp,
-      )
-      .map(|map| {
-        map.allocator().shrink_on_drop(true);
+    let open_opts = SklOpenOptions::new()
+      .create_new(Some(opts.size as u32))
+      .read(true)
+      .write(true);
+    SkipMap::<Meta, _>::map_mut_with_options_and_comparator_and_path_builder::<
+      _,
+      core::convert::Infallible,
+    >(
+      || Ok(filename(dir, opts.fid, LOG_EXTENSION)),
+      Options::new().with_magic_version(CURRENT_VERSION),
+      open_opts,
+      MmapOptions::new(),
+      cmp,
+    )
+    .map(|map| {
+      map.allocator().shrink_on_drop(true);
 
-        Self {
-          map,
-          fid: opts.fid,
-          sync_on_write: opts.sync_on_write,
-          ro: false,
-          minimum: None,
-          maximum: None,
-          max_version: None,
-          min_version: None,
-        }
-      })
-      .map_err(Into::into)
+      Self {
+        map,
+        fid: opts.fid,
+        sync_on_write: opts.sync_on_write,
+        ro: false,
+        minimum: None,
+        maximum: None,
+        max_version: None,
+        min_version: None,
+      }
     })
+    .map_err(|e| e.unwrap_right().into())
   }
 
   #[cfg(not(feature = "std"))]
@@ -179,39 +178,37 @@ impl<C: Comparator> LogFile<C> {
     cmp: Arc<C>,
     opts: OpenOptions,
   ) -> Result<Self, LogFileError> {
-    with_filename(path, opts.fid, LOG_EXTENSION, |path| {
-      let open_opts = SklOpenOptions::new().read(true);
-      SkipMap::<Meta, _>::map_with_comparator(
-        path,
-        open_opts,
-        MmapOptions::new(),
-        cmp,
-        CURRENT_VERSION,
-      )
-      .map(|map| {
-        map.allocator().shrink_on_drop(true);
+    let open_opts = SklOpenOptions::new().read(true);
+    SkipMap::<Meta, _>::map_with_comparator_and_path_builder::<_, core::convert::Infallible>(
+      || Ok(filename(path, opts.fid, LOG_EXTENSION)),
+      open_opts,
+      MmapOptions::new(),
+      cmp,
+      CURRENT_VERSION,
+    )
+    .map(|map| {
+      map.allocator().shrink_on_drop(true);
 
-        let max_version = map.max_version();
-        let min_version = map.min_version();
-        let minimum = map
-          .first(max_version)
-          .map(|ent| Bytes::copy_from_slice(ent.key()));
-        let maximum = map
-          .last(max_version)
-          .map(|ent| Bytes::copy_from_slice(ent.key()));
-        Self {
-          map,
-          fid: opts.fid,
-          sync_on_write: false,
-          ro: true,
-          minimum,
-          maximum,
-          max_version: Some(max_version),
-          min_version: Some(min_version),
-        }
-      })
-      .map_err(Into::into)
+      let max_version = map.max_version();
+      let min_version = map.min_version();
+      let minimum = map
+        .first(max_version)
+        .map(|ent| Bytes::copy_from_slice(ent.key()));
+      let maximum = map
+        .last(max_version)
+        .map(|ent| Bytes::copy_from_slice(ent.key()));
+      Self {
+        map,
+        fid: opts.fid,
+        sync_on_write: false,
+        ro: true,
+        minimum,
+        maximum,
+        max_version: Some(max_version),
+        min_version: Some(min_version),
+      }
     })
+    .map_err(|e| e.unwrap_right().into())
   }
 
   #[inline]
@@ -404,15 +401,10 @@ impl<C: Comparator> LogFile<C> {
   /// # Safety
   /// - must ensure that there is only one copy of the log file.
   #[inline]
-  pub(crate) unsafe fn remove_file<P: AsRef<std::path::Path>>(
-    self,
-    dir: P,
-  ) -> Result<(), LogFileError> {
-    let fid = self.fid;
+  pub(crate) unsafe fn remove_file(self) -> Result<(), LogFileError> {
+    let path = self.map.allocator().path().cloned().unwrap();
     drop(self);
-    with_filename(dir, fid, LOG_EXTENSION, |path| {
-      std::fs::remove_file(path).map_err(Into::into)
-    })
+    std::fs::remove_file(path.as_path()).map_err(Into::into)
   }
 
   #[inline]

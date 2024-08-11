@@ -9,11 +9,13 @@ enum Memmap {
   Unmap,
   Map {
     backed: File,
+    path: std::path::PathBuf,
     mmap: Mmap,
     lock: bool,
   },
   MapMut {
     backed: File,
+    path: std::path::PathBuf,
     mmap: MmapMut,
     lock: bool,
   },
@@ -50,32 +52,33 @@ impl MmapValueLog {
     path: P,
     opts: CreateOptions,
   ) -> Result<Self, ValueLogError> {
-    with_filename(path, opts.fid, VLOG_EXTENSION, |path| {
-      let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let path = filename(path, opts.fid, VLOG_EXTENSION);
 
-      file.set_len(opts.size)?;
+    let file = std::fs::OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create_new(true)
+      .open(&path)?;
 
-      if opts.lock {
-        file.lock_exclusive()?;
-      }
+    file.set_len(opts.size)?;
 
-      let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+    if opts.lock {
+      file.lock_exclusive()?;
+    }
 
-      Ok(Self {
-        fid: opts.fid,
-        buf: Memmap::MapMut {
-          backed: file,
-          mmap,
-          lock: opts.lock,
-        },
-        len: 0,
-        cap: opts.size,
-        ro: false,
-      })
+    let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+
+    Ok(Self {
+      fid: opts.fid,
+      buf: Memmap::MapMut {
+        path,
+        backed: file,
+        mmap,
+        lock: opts.lock,
+      },
+      len: 0,
+      cap: opts.size,
+      ro: false,
     })
   }
 
@@ -83,28 +86,28 @@ impl MmapValueLog {
     path: P,
     opts: OpenOptions,
   ) -> Result<Self, ValueLogError> {
-    with_filename(path, opts.fid, VLOG_EXTENSION, |path| {
-      let file = std::fs::OpenOptions::new().read(true).open(path)?;
+    let path = filename(path, opts.fid, VLOG_EXTENSION);
+    let file = std::fs::OpenOptions::new().read(true).open(&path)?;
 
-      if opts.lock {
-        file.lock_exclusive()?;
-      }
+    if opts.lock {
+      file.lock_exclusive()?;
+    }
 
-      let cap = file.metadata()?.len();
+    let cap = file.metadata()?.len();
 
-      let mmap = unsafe { MmapOptions::new().map(&file)? };
+    let mmap = unsafe { MmapOptions::new().map(&file)? };
 
-      Ok(Self {
-        fid: opts.fid,
-        buf: Memmap::Map {
-          backed: file,
-          mmap,
-          lock: opts.lock,
-        },
-        len: cap,
-        cap,
-        ro: true,
-      })
+    Ok(Self {
+      fid: opts.fid,
+      buf: Memmap::Map {
+        backed: file,
+        path,
+        mmap,
+        lock: opts.lock,
+      },
+      len: cap,
+      cap,
+      ro: true,
     })
   }
 
@@ -203,9 +206,29 @@ impl MmapValueLog {
   }
 
   #[inline]
-  pub fn remove<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<(), ValueLogError> {
-    with_filename(dir, self.fid, VLOG_EXTENSION, |path| {
-      std::fs::remove_file(path).map_err(Into::into)
-    })
+  pub fn remove(self) -> Result<(), ValueLogError> {
+    match self.buf {
+      Memmap::Map {
+        backed, path, lock, ..
+      } => {
+        if lock {
+          backed.unlock()?;
+        }
+
+        std::fs::remove_file(path)?;
+        Ok(())
+      }
+      Memmap::MapMut {
+        backed, path, lock, ..
+      } => {
+        if lock {
+          backed.unlock()?;
+        }
+
+        std::fs::remove_file(path)?;
+        Ok(())
+      }
+      _ => Err(ValueLogError::Closed),
+    }
   }
 }
