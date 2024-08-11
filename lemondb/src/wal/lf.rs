@@ -4,7 +4,7 @@ use core::{
   ops::{Bound, RangeBounds},
   sync::atomic::Ordering,
 };
-use std::io;
+use std::{io, path::Path, sync::Arc};
 
 use bytes::Bytes;
 use skl::{
@@ -37,16 +37,12 @@ pub struct LogFile<C = Ascend> {
 
 impl<C> LogFile<C> {
   /// Flushes outstanding memory map modifications to disk.
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   #[inline]
   pub fn flush(&self) -> io::Result<()> {
     self.map.flush()
   }
 
   /// Asynchronously flushes outstanding memory map modifications to disk.
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   #[inline]
   pub fn flush_async(&self) -> io::Result<()> {
     self.map.flush_async()
@@ -79,8 +75,7 @@ impl<C> LogFile<C> {
 
 impl<C: Comparator> LogFile<C> {
   /// Create a new log with the given options.
-  #[cfg(feature = "std")]
-  pub fn create<P: AsRef<std::path::Path>>(
+  pub fn create<P: AsRef<Path>>(
     dir: P,
     cmp: Arc<C>,
     opts: CreateOptions,
@@ -171,9 +166,8 @@ impl<C: Comparator> LogFile<C> {
   /// Open an existing log with the given options.
   ///
   /// **Note**: `LogFile` constructed with this method is read only.
-  #[cfg(feature = "std")]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-  pub fn open<P: AsRef<std::path::Path>>(
+
+  pub fn open<P: AsRef<Path>>(
     path: P,
     cmp: Arc<C>,
     opts: OpenOptions,

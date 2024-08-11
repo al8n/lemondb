@@ -11,10 +11,7 @@ rust-version = "1.73"
 
 [features]
 default = ["std", "tracing"]
-alloc = ["hashbrown"]
-
 std = [
-  "ahash/default",
   "bytes/default",
   "crossbeam-skiplist/default",
   "either/default",
@@ -24,15 +21,12 @@ std = [
   "memmap2",
   "fs4",
   "indexmap/default",
-  "quick_cache",
   "smallvec-wrapper/default",
 ]
-
 ttl = ["std", "time"]
 
 [dependencies]
 aol.workspace = true 
-ahash.workspace = true
 bytes.workspace = true
 crc32fast.workspace = true
 crossbeam-skiplist.workspace = true
@@ -40,12 +34,11 @@ derive_more.workspace = true
 enum_dispatch.workspace = true
 either.workspace = true
 fs4 = { workspace = true, optional = true }
-hashbrown = { workspace = true, optional = true }
-indexmap = { workspace = true, default-features = false }
+indexmap.workspace = true
 memmap2 = { workspace = true, optional = true }
 once_cell.workspace = true
 parking_lot = { version = "0.12", optional = true }
-quick_cache = { version = "0.6", optional = true }
+quick_cache = "0.6"
 skl.workspace = true 
 smallvec-wrapper.workspace = true
 smol_str.workspace = true
@@ -57,7 +50,6 @@ oneshot = "0.1"
 crossbeam-channel = "0.5"
 
 time = { workspace = true, optional = true }
-
 tracing = { workspace = true, optional = true }
 
 

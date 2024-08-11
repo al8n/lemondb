@@ -9,23 +9,18 @@ use core::cell::UnsafeCell;
 
 use error::EncodeHeaderError;
 
-#[cfg(feature = "std")]
 use mmap::*;
-#[cfg(feature = "std")]
+
 use mmap_anon::*;
 
-#[cfg(feature = "std")]
 mod mmap;
-#[cfg(feature = "std")]
+
 mod mmap_anon;
 
 #[derive(derive_more::From)]
 enum ValueLogKind {
-  Placeholder(Fid),
   // Memory(MemoryValueLog),
-  #[cfg(feature = "std")]
   Mmap(MmapValueLog),
-  #[cfg(feature = "std")]
   MmapAnon(MmapAnonValueLog),
 }
 
@@ -145,13 +140,6 @@ unsafe impl Send for ValueLog {}
 unsafe impl Sync for ValueLog {}
 
 impl ValueLog {
-  pub fn placeholder(fid: Fid) -> Self {
-    Self {
-      kind: UnsafeCell::new(ValueLogKind::Placeholder(fid)),
-    }
-  }
-
-  #[cfg(feature = "std")]
   pub fn create<P: AsRef<std::path::Path>>(
     path: P,
     opts: CreateOptions,
@@ -161,7 +149,6 @@ impl ValueLog {
     })
   }
 
-  #[cfg(feature = "std")]
   pub fn open<P: AsRef<std::path::Path>>(
     path: P,
     opts: OpenOptions,
@@ -171,12 +158,10 @@ impl ValueLog {
     })
   }
 
-  #[cfg(feature = "std")]
   pub fn remove(self) -> Result<(), ValueLogError> {
     match self.kind.into_inner() {
       ValueLogKind::Mmap(vlf) => vlf.remove(),
       ValueLogKind::MmapAnon(mut vlf) => vlf.remove(),
-      ValueLogKind::Placeholder(_) => Ok(()),
     }
   }
 
@@ -189,18 +174,15 @@ impl ValueLog {
   ) -> Result<Pointer, ValueLogError> {
     match self.kind_mut() {
       ValueLogKind::Mmap(vlf) => vlf.write(version, key, value, checksum),
-      ValueLogKind::MmapAnon(vlf) => vlf.write(version, key, value, checksum),
-      ValueLogKind::Placeholder(_) => Err(ValueLogError::NotEnoughSpace {
-        required: Self::encoded_entry_size(version, key, value, checksum) as u64,
-        remaining: 0,
-      }),
+      ValueLogKind::MmapAnon(vlf) => vlf.write(version, key, value, checksum), 
     }
   }
 
-  /// Returns `true` if the value log is a placeholder.
-  #[inline]
-  pub(crate) fn is_placeholder(&self) -> bool {
-    matches!(self.kind(), ValueLogKind::Placeholder(_))
+  pub(crate) fn check_pointer(&self, pointer: Pointer) -> Result<(), ValueLogError> {
+    match self.kind() {
+      ValueLogKind::Mmap(vlf) => vlf.check_pointer(pointer),
+      ValueLogKind::MmapAnon(vlf) => vlf.check_pointer(pointer),
+    }
   }
 
   /// Returns a byte slice which contains header, key and value.
@@ -208,11 +190,6 @@ impl ValueLog {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.read(offset, size),
       ValueLogKind::MmapAnon(vlf) => vlf.read(offset, size),
-      ValueLogKind::Placeholder(_) => Err(ValueLogError::OutOfBound {
-        offset,
-        len: size,
-        size: 0,
-      }),
     }
   }
 
@@ -220,19 +197,11 @@ impl ValueLog {
   ///
   /// # Safety
   /// - The caller must ensure that the offset and size are within the value log.
-  pub(crate) unsafe fn read_unchecked(
-    &self,
-    offset: usize,
-    size: usize,
-  ) -> Result<&[u8], ValueLogError> {
+  /// - The caller must make sure that the value log is not closed.
+  pub(crate) unsafe fn read_unchecked(&self, offset: usize, size: usize) -> &[u8] {
     match self.kind() {
-      ValueLogKind::Mmap(vlf) => vlf.read(offset, size),
-      ValueLogKind::MmapAnon(vlf) => vlf.read(offset, size),
-      ValueLogKind::Placeholder(_) => Err(ValueLogError::OutOfBound {
-        offset,
-        len: size,
-        size: 0,
-      }),
+      ValueLogKind::Mmap(vlf) => vlf.read_unchecked(offset, size),
+      ValueLogKind::MmapAnon(vlf) => vlf.read_unchecked(offset, size),
     }
   }
 
@@ -251,7 +220,6 @@ impl ValueLog {
     match self.kind_mut() {
       ValueLogKind::Mmap(vlf) => vlf.rewind(size),
       ValueLogKind::MmapAnon(vlf) => vlf.rewind(size),
-      ValueLogKind::Placeholder(_) => Ok(()),
     }
   }
 
@@ -260,7 +228,6 @@ impl ValueLog {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.len(),
       ValueLogKind::MmapAnon(vlf) => vlf.len(),
-      ValueLogKind::Placeholder(_) => 0,
     }
   }
 
@@ -269,7 +236,6 @@ impl ValueLog {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.capacity(),
       ValueLogKind::MmapAnon(vlf) => vlf.capacity(),
-      ValueLogKind::Placeholder(_) => 0,
     }
   }
 
@@ -278,7 +244,6 @@ impl ValueLog {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.remaining(),
       ValueLogKind::MmapAnon(vlf) => vlf.remaining(),
-      ValueLogKind::Placeholder(_) => 0,
     }
   }
 
@@ -287,7 +252,6 @@ impl ValueLog {
     match self.kind() {
       ValueLogKind::Mmap(vlf) => vlf.fid(),
       ValueLogKind::MmapAnon(vlf) => vlf.fid(),
-      ValueLogKind::Placeholder(fid) => *fid,
     }
   }
 

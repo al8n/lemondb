@@ -373,7 +373,6 @@ impl core::fmt::Display for PointerError {
   }
 }
 
-#[cfg(feature = "std")]
 impl std::error::Error for PointerError {}
 
 /// A pointer to the bytes in the log.

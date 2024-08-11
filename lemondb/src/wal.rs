@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+  path::{Path, PathBuf},
+  sync::Arc,
+};
 
 use cache::ValueLogCache;
 use crossbeam_skiplist::{map::Entry as CMapEntry, SkipMap};
@@ -13,7 +16,6 @@ use skl::{map::VersionedEntry, Ascend, Trailer};
 
 use smallvec_wrapper::SmallVec;
 
-#[cfg(feature = "std")]
 pub(crate) use vlf::ValueLog;
 
 use crate::options::CreateOptions;
@@ -27,7 +29,7 @@ use super::{
 };
 
 mod lf;
-#[cfg(feature = "std")]
+
 mod vlf;
 
 #[cfg(not(feature = "parking_lot"))]
@@ -78,10 +80,10 @@ impl EntryKind {
   fn value(&self) -> &[u8] {
     match self {
       Self::Inlined(ent) => ent.value().unwrap(),
-      // TODO: optimize read
-      Self::Pointer { pointer, log, .. } => log
-        .read(pointer.offset() as usize, pointer.size() as usize)
-        .unwrap(),
+      // Safety: the value is always present, we already checked it before we construct the entry kind.
+      Self::Pointer { pointer, log, .. } => unsafe {
+        log.read_unchecked(pointer.offset() as usize, pointer.size() as usize)
+      },
     }
   }
 }
@@ -123,8 +125,7 @@ enum LazyEntryKind<'a> {
     vlog: Arc<ValueLog>,
   },
   Pointer {
-    #[cfg(feature = "std")]
-    dir: &'a std::path::Path,
+    dir: &'a Path,
     ent: VersionedEntry<Meta>,
     pointer: Pointer,
     vlog: OnceCell<Arc<ValueLog>>,
@@ -192,11 +193,10 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
   pub fn value_or_init(&self) -> Result<&[u8], Error> {
     match &self.kind {
       LazyEntryKind::Inlined(ent) => Ok(ent.value().unwrap()),
-      LazyEntryKind::Cached { pointer, vlog, .. } => Ok(
-        vlog
-          .read(pointer.offset() as usize, pointer.size() as usize)
-          .unwrap(),
-      ),
+      // Safety: the value is always present, we already checked it before we construct the LazyEntryRef.
+      LazyEntryKind::Cached { pointer, vlog, .. } => unsafe { Ok(vlog
+        .read_unchecked(pointer.offset() as usize, pointer.size() as usize))
+      },
       LazyEntryKind::Pointer {
         dir,
         vlog,
@@ -205,14 +205,6 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
         opts,
         ..
       } => {
-        vlog.get_or_try_init(|| {
-          let vlog = ValueLog::open(dir, *opts).map(Arc::new)?;
-          if let Some(cache) = cache.as_ref() {
-            cache.insert(pointer.fid(), vlog.clone());
-          }
-          Result::<_, Error>::Ok(vlog)
-        })?;
-
         let fid = pointer.fid();
 
         let vlog = vlog.get_or_try_init(|| {
@@ -272,16 +264,17 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
     parent: CMapEntry<'a, Fid, LogFile<C>>,
     pointer: Pointer,
     vlog: Arc<ValueLog>,
-  ) -> Self {
-    Self {
+  ) -> Result<Self, Error> {
+    vlog.check_pointer(pointer)?;
+    Ok(Self {
       parent,
       kind: LazyEntryKind::Cached { ent, pointer, vlog },
-    }
+    })
   }
 
   #[inline]
   fn from_pointer(
-    #[cfg(feature = "std")] dir: &'a std::path::Path,
+    dir: &'a Path,
     ent: VersionedEntry<Meta>,
     parent: CMapEntry<'a, Fid, LogFile<C>>,
     pointer: Pointer,
@@ -291,7 +284,6 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
     Self {
       parent,
       kind: LazyEntryKind::Pointer {
-        #[cfg(feature = "std")]
         dir,
         ent,
         pointer,
@@ -304,8 +296,7 @@ impl<'a, C: Comparator> LazyEntryRef<'a, C> {
 }
 
 pub(crate) struct Wal<C = Ascend> {
-  #[cfg(feature = "std")]
-  dir: Arc<std::path::PathBuf>,
+  dir: Arc<PathBuf>,
   fid_generator: Arc<AtomicFid>,
 
   /// All of the log files.
@@ -316,7 +307,6 @@ pub(crate) struct Wal<C = Ascend> {
   vlfs: SkipMap<Fid, Arc<ValueLog>>,
 
   /// Cache for value log files.
-  #[cfg(feature = "std")]
   vcache: Option<Arc<ValueLogCache>>,
 
   manifest: Arc<Mutex<ManifestFile>>,
@@ -328,11 +318,11 @@ pub(crate) struct Wal<C = Ascend> {
 impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   // TODO: support mmap anon and memory create
   pub(crate) fn create(
-    #[cfg(feature = "std")] dir: Arc<std::path::PathBuf>,
+    dir: Arc<PathBuf>,
     fid: Fid,
     fid_generator: Arc<AtomicFid>,
     manifest: Arc<Mutex<ManifestFile>>,
-    #[cfg(feature = "std")] cache: Option<Arc<ValueLogCache>>,
+    cache: Option<Arc<ValueLogCache>>,
     cmp: Arc<C>,
     opts: WalOptions,
   ) -> Result<Self, Error> {
@@ -353,7 +343,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       fid_generator,
       lfs: map,
       vlfs: SkipMap::new(),
-      #[cfg(feature = "std")]
+
       vcache: cache,
       manifest,
       opts,
@@ -362,7 +352,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   }
 
   pub(crate) fn open(
-    #[cfg(feature = "std")] dir: Arc<std::path::PathBuf>,
+    dir: Arc<PathBuf>,
     table_manifest: &TableManifest,
     fid_generator: Arc<AtomicFid>,
     manifest: Arc<Mutex<ManifestFile>>,
@@ -391,7 +381,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       fid_generator,
       lfs,
       vlfs,
-      #[cfg(feature = "std")]
+
       vcache: None,
       manifest,
       opts,
@@ -474,13 +464,12 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
             let fid = vp.fid();
 
             if let Some(vlog_ent) = self.vlfs.get(&fid) {
-              LazyEntryRef::from_owned_vlog(ent.to_owned(), file, vp, vlog_ent.value().clone())
+              LazyEntryRef::from_owned_vlog(ent.to_owned(), file, vp, vlog_ent.value().clone())?
             } else if let Some(cache) = self.vcache.as_ref() {
               if let Some(vlog) = cache.get(&fid) {
-                LazyEntryRef::from_owned_vlog(ent.to_owned(), file, vp, vlog)
+                LazyEntryRef::from_owned_vlog(ent.to_owned(), file, vp, vlog)?
               } else {
                 LazyEntryRef::from_pointer(
-                  #[cfg(feature = "std")]
                   dir,
                   ent.to_owned(),
                   file,
@@ -491,7 +480,6 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
               }
             } else {
               LazyEntryRef::from_pointer(
-                #[cfg(feature = "std")]
                 dir,
                 ent.to_owned(),
                 file,
@@ -623,7 +611,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
       Err(e) => {
         if let Err(_e) = new_lf.clear() {
           #[cfg(feature = "tracing")]
-          tracing::error!(err=%_e, "failed to clear log file");
+          tracing::error!(fid = %new_lf.fid(), err=%_e, "failed to clear log file");
         }
 
         self.lfs.insert(new_fid, new_lf);
@@ -655,8 +643,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           .manifest
           .lock_me()
           .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
-        self.vlfs.insert(new_fid, Arc::new(vlog));
-        self.vlfs.back().unwrap()
+        self.vlfs.insert(new_fid, Arc::new(vlog))
       }
     };
     let active_vlf = active_vlf_entry.value();
@@ -847,15 +834,18 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
   fn update_active_vlog(&self, fid: Fid, vlog: ValueLog) {
     // update the current value log file
     self.vlfs.insert(fid, Arc::new(vlog));
+
+    // in memory mode, we don't need to remove any value log file
+    if self.opts.in_memory.is_some() {
+      return;
+    }
+
     if self.vlfs.len() > self.opts.max_immutable_vlogs as usize + 1 {
       if let Some(old_vlf) = self.vlfs.pop_front() {
         let old_vlf = old_vlf.value();
-        if !old_vlf.is_placeholder() {
-          // if we have a cache, insert the oldest value log file to the cache
-          #[cfg(feature = "std")]
-          if let Some(ref vcache) = self.vcache {
-            vcache.insert(old_vlf.fid(), old_vlf.clone());
-          }
+        // if we have a cache, insert the oldest value log file to the cache
+        if let Some(ref vcache) = self.vcache {
+          vcache.insert(old_vlf.fid(), old_vlf.clone());
         }
       }
     }
@@ -896,8 +886,7 @@ impl<C: Comparator + Send + Sync + 'static> Wal<C> {
           .manifest
           .lock_me()
           .append(aol::Entry::creation(ManifestRecord::log(new_fid, tid)))?;
-        self.vlfs.insert(new_fid, Arc::new(vlog));
-        self.vlfs.back().unwrap()
+        self.vlfs.insert(new_fid, Arc::new(vlog))
       }
     };
 

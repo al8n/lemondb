@@ -1,4 +1,7 @@
-use std::fs::File;
+use std::{
+  fs::File,
+  path::{Path, PathBuf},
+};
 
 use fs4::fs_std::FileExt;
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -9,34 +12,17 @@ enum Memmap {
   Unmap,
   Map {
     backed: File,
-    path: std::path::PathBuf,
+    path: PathBuf,
     mmap: Mmap,
     lock: bool,
   },
   MapMut {
     backed: File,
-    path: std::path::PathBuf,
+    path: PathBuf,
     mmap: MmapMut,
     lock: bool,
   },
 }
-
-// impl Memmap {
-//   fn truncate(&mut self, len: u64) -> Result<(), ValueLogError> {
-//     match self {
-//       Memmap::Map { .. } => Err(ValueLogError::ReadOnly),
-//       Memmap::MapMut { backed, mmap, .. } => {
-//         backed.set_len(len)?;
-
-//         unsafe { ptr::drop_in_place(mmap) };
-
-//         *mmap = unsafe { MmapOptions::new().map_mut(&*backed)? };
-//         Ok(())
-//       }
-//       _ => Err(ValueLogError::Closed),
-//     }
-//   }
-// }
 
 pub struct MmapValueLog {
   fid: Fid,
@@ -48,10 +34,7 @@ pub struct MmapValueLog {
 
 impl MmapValueLog {
   #[inline]
-  pub fn create<P: AsRef<std::path::Path>>(
-    path: P,
-    opts: CreateOptions,
-  ) -> Result<Self, ValueLogError> {
+  pub fn create<P: AsRef<Path>>(path: P, opts: CreateOptions) -> Result<Self, ValueLogError> {
     let path = filename(path, opts.fid, VLOG_EXTENSION);
 
     let file = std::fs::OpenOptions::new()
@@ -82,10 +65,7 @@ impl MmapValueLog {
     })
   }
 
-  pub fn open<P: AsRef<std::path::Path>>(
-    path: P,
-    opts: OpenOptions,
-  ) -> Result<Self, ValueLogError> {
+  pub fn open<P: AsRef<Path>>(path: P, opts: OpenOptions) -> Result<Self, ValueLogError> {
     let path = filename(path, opts.fid, VLOG_EXTENSION);
     let file = std::fs::OpenOptions::new().read(true).open(&path)?;
 
@@ -157,6 +137,22 @@ impl MmapValueLog {
     }
   }
 
+  /// Returns error if the pointer is invalid
+  #[inline]
+  pub fn check_pointer(&self, pointer: Pointer) -> Result<(), ValueLogError> {
+    let offset = pointer.offset();
+    let size = pointer.size();
+    if offset + size <= self.len {
+      Ok(())
+    } else {
+      return Err(ValueLogError::OutOfBound {
+        offset: offset as usize,
+        len: size as usize,
+        size: self.len,
+      });
+    }
+  }
+
   /// Returns a byte slice which contains header, key and value.
   #[inline]
   pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
@@ -173,6 +169,20 @@ impl MmapValueLog {
         size: self.len,
       });
     })
+  }
+
+  /// Returns a byte slice which contains header, key and value.
+  ///
+  /// # Safety
+  /// - The caller must ensure that the offset and size are within the value log.
+  /// - The value log must not be closed.
+  #[inline]
+  pub(crate) unsafe fn read_unchecked(&self, offset: usize, size: usize) -> &[u8] {
+    match self.buf {
+      Memmap::Map { ref mmap, .. } => &mmap[offset..offset + size],
+      Memmap::MapMut { ref mmap, .. } => &mmap[offset..offset + size],
+      _ => panic!("value log is closed"),
+    }
   }
 
   #[inline]

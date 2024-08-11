@@ -9,7 +9,7 @@ pub(crate) struct AsyncManifestFile {
 }
 
 impl AsyncManifestFile {
-  #[cfg(feature = "std")]
+  
   pub(crate) fn open<P: AsRef<std::path::Path>>(
     dir: Option<P>,
     opts: ManifestOptions,
@@ -47,7 +47,7 @@ impl AsyncManifestFile {
   ) -> Result<(), ManifestFileError> {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append(ent).map_err(Into::into),
-      #[cfg(feature = "std")]
+      
       ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
     }
   }
@@ -59,7 +59,7 @@ impl AsyncManifestFile {
   ) -> Result<(), ManifestFileError> {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append_batch(entries).map_err(Into::into),
-      #[cfg(feature = "std")]
+      
       ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),
     }
   }
@@ -68,7 +68,7 @@ impl AsyncManifestFile {
   pub(crate) fn manifest(&self) -> &Manifest {
     match &self.kind {
       ManifestFileKind::Memory(m) => m.manifest(),
-      #[cfg(feature = "std")]
+      
       ManifestFileKind::Disk(d) => d.manifest(),
     }
   }

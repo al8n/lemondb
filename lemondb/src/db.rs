@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-#[cfg(feature = "std")]
 use std::path::{Path, PathBuf};
 
 use cache::ValueLogCache;
@@ -24,7 +23,6 @@ use core::{
 #[cfg(not(feature = "parking_lot"))]
 use std::sync::Mutex;
 
-#[cfg(feature = "std")]
 use std::collections::HashMap;
 
 use bytes::Bytes;
@@ -556,9 +554,8 @@ enum Event {
 
 /// Database
 pub struct Db<C = Ascend> {
-  #[cfg(feature = "std")]
   dir: Arc<PathBuf>,
-  #[cfg(feature = "std")]
+
   logs_dir: Arc<PathBuf>,
   fid_generator: Arc<AtomicFid>,
   manifest: Arc<Mutex<ManifestFile>>,

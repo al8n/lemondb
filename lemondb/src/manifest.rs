@@ -2,10 +2,8 @@ use core::mem;
 
 use std::collections::btree_set::BTreeSet;
 
-#[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
 
-#[cfg(feature = "std")]
 use either::Either;
 
 use aol::{CustomFlags, Entry};
@@ -97,13 +95,11 @@ impl ManifestRecordError {
 
 /// Errors for manifest file.
 pub struct ManifestFileError {
-  #[cfg(feature = "std")]
   source: Either<ManifestError, aol::fs::Error<crate::manifest::Manifest>>,
 }
 
 impl core::fmt::Debug for ManifestFileError {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    #[cfg(feature = "std")]
     match &self.source {
       Either::Left(e) => e.fmt(f),
       Either::Right(e) => e.fmt(f),
@@ -114,7 +110,6 @@ impl core::fmt::Debug for ManifestFileError {
   }
 }
 
-#[cfg(feature = "std")]
 impl From<aol::fs::Error<crate::manifest::Manifest>> for ManifestFileError {
   fn from(e: aol::fs::Error<crate::manifest::Manifest>) -> Self {
     Self {
@@ -123,7 +118,6 @@ impl From<aol::fs::Error<crate::manifest::Manifest>> for ManifestFileError {
   }
 }
 
-#[cfg(feature = "std")]
 impl From<ManifestError> for ManifestFileError {
   fn from(e: ManifestError) -> Self {
     Self {
@@ -134,7 +128,6 @@ impl From<ManifestError> for ManifestFileError {
 
 impl core::fmt::Display for ManifestFileError {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    #[cfg(feature = "std")]
     match self.source {
       Either::Left(ref e) => e.fmt(f),
       Either::Right(ref e) => e.fmt(f),
@@ -145,7 +138,6 @@ impl core::fmt::Display for ManifestFileError {
   }
 }
 
-#[cfg(feature = "std")]
 impl std::error::Error for ManifestFileError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -167,7 +159,6 @@ impl ManifestRecord {
   }
 }
 
-#[cfg(feature = "std")]
 impl aol::Record for ManifestRecord {
   type Error = ManifestRecordError;
 
@@ -490,7 +481,7 @@ impl Manifest {
 #[derive(derive_more::From)]
 enum ManifestFileKind {
   Memory(memory::MemoryManifest),
-  #[cfg(feature = "std")]
+
   Disk(disk::DiskManifest),
 }
 
@@ -503,7 +494,6 @@ pub(crate) struct ManifestFile {
 }
 
 impl ManifestFile {
-  #[cfg(feature = "std")]
   pub(crate) fn open<P: AsRef<std::path::Path>>(
     dir: Option<P>,
     opts: ManifestOptions,
@@ -538,7 +528,7 @@ impl ManifestFile {
   pub(crate) fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), ManifestFileError> {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append(ent).map_err(Into::into),
-      #[cfg(feature = "std")]
+
       ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
     }
   }
@@ -550,7 +540,7 @@ impl ManifestFile {
   ) -> Result<(), ManifestFileError> {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append_batch(entries).map_err(Into::into),
-      #[cfg(feature = "std")]
+
       ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),
     }
   }
@@ -559,7 +549,7 @@ impl ManifestFile {
   pub(crate) fn manifest(&self) -> &Manifest {
     match &self.kind {
       ManifestFileKind::Memory(m) => m.manifest(),
-      #[cfg(feature = "std")]
+
       ManifestFileKind::Disk(d) => d.manifest(),
     }
   }

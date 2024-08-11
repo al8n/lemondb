@@ -62,6 +62,23 @@ impl MmapAnonValueLog {
     Err(ValueLogError::Closed)
   }
 
+  /// Returns error if the pointer is invalid
+  #[inline]
+  pub fn check_pointer(&self, pointer: Pointer) -> Result<(), ValueLogError> {
+    let offset = pointer.offset();
+    let size = pointer.size();
+
+    if offset as u64 + size as u64 <= self.len {
+      Ok(())
+    } else {
+      Err(ValueLogError::OutOfBound {
+        offset: offset as usize,
+        len: size as usize,
+        size: self.len,
+      })
+    }
+  }
+
   /// Returns a byte slice which contains header, key and value.
   #[inline]
   pub(crate) fn read(&self, offset: usize, size: usize) -> Result<&[u8], ValueLogError> {
@@ -79,6 +96,16 @@ impl MmapAnonValueLog {
         }
       }
     }
+  }
+
+  /// Returns a byte slice which contains header, key and value.
+  ///
+  /// # Safety
+  /// - The caller must ensure that the offset and size are within the value log.
+  /// - The value log must not be closed.
+  #[inline]
+  pub(crate) unsafe fn read_unchecked(&self, offset: usize, size: usize) -> &[u8] {
+    &self.buf.as_ref().unwrap()[offset..offset + size]
   }
 
   #[inline]

@@ -63,7 +63,6 @@ impl core::fmt::Display for VarintError {
   }
 }
 
-#[cfg(feature = "std")]
 impl std::error::Error for VarintError {}
 
 /// Encodes an integer value into LEB128 variable length format, and writes it to the buffer.

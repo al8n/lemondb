@@ -1,7 +1,5 @@
-#[cfg(feature = "std")]
 use core::convert::Infallible;
 
-#[cfg(feature = "std")]
 use either::Either;
 use smol_str::SmolStr;
 
@@ -25,9 +23,8 @@ impl core::fmt::Display for ChecksumMismatch {
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum LogFileError {
   /// An I/O error occurred.
-  #[cfg(feature = "std")]
+
   #[cfg_attr(feature = "std", error(transparent))]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   IO(#[from] std::io::Error),
   /// A log error occurred.
   #[cfg_attr(feature = "std", error(transparent))]
@@ -72,8 +69,7 @@ impl core::fmt::Display for LogFileError {
 
 /// Errors that can occur when encode/decode header.
 #[derive(Debug, thiserror::Error)]
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+
 pub enum EncodeHeaderError {
   /// Buffer is too small to encode the value pointer.
   #[error("buffer is too small to encode header")]
@@ -85,8 +81,7 @@ pub enum EncodeHeaderError {
 
 /// Errors that can occur when encode/decode header.
 #[derive(Debug, thiserror::Error)]
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+
 pub enum DecodeHeaderError {
   /// Not enough bytes to decode the value pointer.
   #[error("not enough bytes to decode header")]
@@ -97,8 +92,7 @@ pub enum DecodeHeaderError {
 }
 
 /// Error type returned by the value log.
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+
 #[derive(Debug, thiserror::Error)]
 pub enum ValueLogError {
   /// An I/O error occurred.
@@ -179,9 +173,8 @@ pub enum Error {
   #[cfg_attr(feature = "std", error("database is read only"))]
   ReadOnly,
   /// An I/O error occurred.
-  #[cfg(feature = "std")]
+
   #[cfg_attr(feature = "std", error(transparent))]
-  #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
   IO(#[from] std::io::Error),
   /// A log file error occurred.
   #[cfg_attr(feature = "std", error(transparent))]
