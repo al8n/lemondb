@@ -187,7 +187,7 @@ impl core::fmt::Debug for Meta {
   }
 }
 
-unsafe impl Trailer for Meta {
+impl Trailer for Meta {
   #[inline]
   fn version(&self) -> u64 {
     self.meta & Self::VERSION_MASK
