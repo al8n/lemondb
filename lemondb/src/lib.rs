@@ -9,15 +9,16 @@ pub type DefaultHashBuilder = std::collections::hash_map::RandomState;
 /// Options for configuring the database.
 pub mod options;
 
-/// Errors that can occur when working with the database.
-pub mod error;
+// /// Errors that can occur when working with the database.
+// pub mod error;
 
-mod cache;
-mod manifest;
-mod wal;
+mod active_log;
+// mod cache;
+// mod manifest;
+// mod wal;
 
-mod db;
-pub use db::*;
+// mod db;
+// pub use db::*;
 
 mod types;
 pub use types::*;

@@ -26,22 +26,21 @@ pub enum LogFileError {
 
   #[cfg_attr(feature = "std", error(transparent))]
   IO(#[from] std::io::Error),
-  /// A log error occurred.
-  #[cfg_attr(feature = "std", error(transparent))]
-  Log(#[cfg_attr(feature = "std", from)] skl::map::Error),
-  /// Returned when writing the batch failed.
-  #[cfg_attr(
-    feature = "std",
-    error("failed to write batch at index {idx}: {source}")
-  )]
-  WriteBatch {
-    /// The index of the key-value pair that caused the error.
-    idx: usize,
-    /// The error that caused the failure.
-    #[cfg_attr(feature = "std", source)]
-    source: skl::map::Error,
-  },
-
+  // /// A log error occurred.
+  // #[cfg_attr(feature = "std", error(transparent))]
+  // Log(#[cfg_attr(feature = "std", from)] skl::map::Error),
+  // /// Returned when writing the batch failed.
+  // #[cfg_attr(
+  //   feature = "std",
+  //   error("failed to write batch at index {idx}: {source}")
+  // )]
+  // WriteBatch {
+  //   /// The index of the key-value pair that caused the error.
+  //   idx: usize,
+  //   /// The error that caused the failure.
+  //   #[cfg_attr(feature = "std", source)]
+  //   source: skl::map::Error,
+  // },
   /// Returned when checksum mismatch.
   #[cfg_attr(feature = "std", error("checksum mismatch"))]
   ChecksumMismatch(#[cfg_attr(feature = "std", from)] ChecksumMismatch),

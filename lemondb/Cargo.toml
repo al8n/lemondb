@@ -7,7 +7,8 @@ homepage = "https://github.com/al8n/lemondb"
 documentation = "https://docs.rs/lemondb"
 description = "A template for creating Rust open-source repo on GitHub"
 license = "MIT OR Apache-2.0"
-rust-version = "1.73"
+rust-version = "1.81"
+
 
 [features]
 default = ["std", "tracing"]
@@ -30,6 +31,7 @@ aol.workspace = true
 bytes.workspace = true
 crc32fast.workspace = true
 crossbeam-skiplist.workspace = true
+dbutils.workspace = true
 derive_more.workspace = true
 enum_dispatch.workspace = true
 either.workspace = true
@@ -37,6 +39,9 @@ fs4 = { workspace = true, optional = true }
 indexmap.workspace = true
 memmap2 = { workspace = true, optional = true }
 once_cell.workspace = true
+orderwal.workspace = true
+valog.workspace = true
+dtlog.workspace = true
 parking_lot = { version = "0.12", optional = true }
 quick_cache = "0.6"
 skl.workspace = true 
@@ -44,6 +49,7 @@ smallvec-wrapper.workspace = true
 smol_str.workspace = true
 thiserror = { workspace = true, optional = true }
 viewit.workspace = true
+zerocopy.workspace = true
 
 # sync
 oneshot = "0.1"

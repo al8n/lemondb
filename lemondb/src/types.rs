@@ -1,11 +1,7 @@
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
-use bytes::Bytes;
-use crossbeam_skiplist::map::Entry as CMapEntry;
-use skl::{
-  map::Entry as MapEntry, map::EntryRef as MapEntryRef,
-  map::VersionedEntryRef as MapVersionedEntryRef, Trailer,
-};
+use skl::Trailer;
+use zerocopy::{FromBytes, FromZeroes};
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
 
@@ -169,62 +165,81 @@ impl core::fmt::Display for Fid {
 /// | 63 bits for version |   1 bit for value pointer mark   | 32 bits for checksum |
 /// +---------------------+----------------------------------+----------------------+
 /// ```
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, FromZeroes, FromBytes)]
 #[repr(C, align(8))]
 pub(crate) struct Meta {
   /// 63 bits for version, 1 bit for value pointer mark
   meta: u64,
-  cks: u32,
+  #[cfg(feature = "ttl")]
+  expire_at: u64,
 }
 
 impl core::fmt::Debug for Meta {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    f.debug_struct("Meta")
-      .field("version", &self.version())
-      .field("checksum", &self.cks)
-      .field("pointer", &self.is_pointer())
-      .finish()
-  }
-}
+    #[cfg(feature = "ttl")]
+    return self
+      .required_fields(f)
+      .field("expire_at", &self.expire_at)
+      .finish();
 
-impl Trailer for Meta {
-  #[inline]
-  fn version(&self) -> u64 {
-    self.meta & Self::VERSION_MASK
+    #[cfg(not(feature = "ttl"))]
+    self.required_fields(f).finish()
   }
 }
 
 impl Meta {
-  const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
-  const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
+  pub(crate) const SIZE: usize = core::mem::size_of::<Self>();
+  pub(crate) const VERSION_SIZE: usize = core::mem::size_of::<u64>();
+  #[cfg(feature = "ttl")]
+  pub(crate) const EXPIRES_AT_SIZE: usize = core::mem::size_of::<u64>();
+
+  #[inline]
+  fn required_fields<'a, 'b: 'a>(
+    &'a self,
+    f: &'a mut core::fmt::Formatter<'b>,
+  ) -> core::fmt::DebugStruct<'a, 'b> {
+    let mut s = f.debug_struct("Meta");
+    s.field("version", &self.version())
+      .field("pointer", &self.is_pointer());
+    s
+  }
+
+  /// ## Panics
+  /// - If the buffer is less than `Meta::VERSION_SIZE`.
+  #[inline]
+  pub(crate) fn decode_version(buf: &[u8]) -> u64 {
+    u64::from_le_bytes(<[u8; Self::VERSION_SIZE]>::try_from(&buf[..Self::VERSION_SIZE]).unwrap())
+      & Self::VERSION_MASK
+  }
+}
+
+impl Meta {
+  pub(crate) const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
+  pub(crate) const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
 
   /// Create a new metadata with the given version.
   #[inline]
-  pub const fn new(version: u64) -> Self {
+  pub const fn new(version: u64, #[cfg(feature = "ttl")] expire_at: u64) -> Self {
     assert!(version < (1 << 63), "version is too large");
 
     Self {
       meta: version,
-      cks: 0,
+      #[cfg(feature = "ttl")]
+      expire_at,
     }
   }
 
   /// Create a new metadata with the given version and value pointer flag.
   #[inline]
-  pub const fn value_pointer(mut version: u64) -> Self {
+  pub const fn value_pointer(mut version: u64, #[cfg(feature = "ttl")] expire_at: u64) -> Self {
     assert!(version < (1 << 63), "version is too large");
 
     version |= Self::VALUE_POINTER_FLAG;
     Self {
       meta: version,
-      cks: 0,
+      #[cfg(feature = "ttl")]
+      expire_at,
     }
-  }
-
-  /// Set the checksum of the entry.
-  #[inline]
-  pub fn set_checksum(&mut self, cks: u32) {
-    self.cks = cks;
   }
 
   /// Set the value pointer flag.
@@ -233,16 +248,23 @@ impl Meta {
     self.meta |= Self::VALUE_POINTER_FLAG;
   }
 
-  /// Returns the checksum of the entry.
-  #[inline]
-  pub const fn checksum(&self) -> u32 {
-    self.cks
-  }
-
   /// Returns `true` if the value of the entry is a value pointer.
   #[inline]
   pub const fn is_pointer(&self) -> bool {
     self.meta & Self::VALUE_POINTER_FLAG != 0
+  }
+
+  /// Returns the version.
+  #[inline]
+  pub fn version(&self) -> u64 {
+    self.meta & Self::VERSION_MASK
+  }
+
+  /// Returns the timestamp of the expiration time.
+  #[cfg(feature = "ttl")]
+  #[inline]
+  pub const fn expire_at(&self) -> u64 {
+    self.expire_at
   }
 
   /// Returns the metadata as a raw 64-bit value.
@@ -252,98 +274,13 @@ impl Meta {
   }
 }
 
-/// A reference to an entry in the log.
-#[derive(Debug, Copy, Clone)]
-pub struct VersionedEntryRef<'a> {
-  ent: MapVersionedEntryRef<'a, Meta>,
-}
-
-impl<'a> VersionedEntryRef<'a> {
-  /// Returns the key of the entry.
+impl Trailer for Meta {
+  #[cfg(feature = "ttl")]
   #[inline]
-  pub const fn key(&self) -> &[u8] {
-    self.ent.key()
-  }
-
-  /// Returns the value of the entry. `None` means the entry is removed.
-  #[inline]
-  pub const fn value(&self) -> Option<&[u8]> {
-    self.ent.value()
-  }
-
-  /// Returns `true` if the value of the entry is a value pointer.
-  #[inline]
-  pub const fn is_pointer(&self) -> bool {
-    self.ent.trailer().is_pointer()
-  }
-
-  /// Returns `true` if the value of the entry is removed.
-  #[inline]
-  pub const fn is_removed(&self) -> bool {
-    self.ent.is_removed()
-  }
-
-  #[inline]
-  pub(crate) const fn new(ent: MapVersionedEntryRef<'a, Meta>) -> Self {
-    Self { ent }
+  fn is_valid(&self) -> bool {
+    self.expire_at <= time::OffsetDateTime::now_utc().unix_timestamp() as u64
   }
 }
-
-/// An entry in the log.
-#[derive(Debug, Clone)]
-pub struct Entry(skl::map::Entry<Meta>);
-
-impl Entry {
-  /// Create a new entry with the given key, value, and metadata.
-  #[inline]
-  pub(crate) const fn new(ent: skl::map::Entry<Meta>) -> Self {
-    Self(ent)
-  }
-
-  /// Returns the key of the entry.
-  #[inline]
-  pub fn key(&self) -> &[u8] {
-    self.0.key()
-  }
-
-  /// Returns the value of the entry.
-  #[inline]
-  pub fn value(&self) -> &[u8] {
-    self.0.value()
-  }
-
-  /// Returns the metadata of the entry.
-  #[inline]
-  pub fn version(&self) -> u64 {
-    self.0.trailer().version()
-  }
-}
-
-// impl Entry {
-//   /// Create a new entry with the given key, value, and metadata.
-//   #[inline]
-//   pub(crate) const fn new(key: Bytes, value: Bytes, meta: Meta) -> Self {
-//     Self { key, value, meta }
-//   }
-
-//   /// Returns the key of the entry.
-//   #[inline]
-//   pub const fn key(&self) -> &Bytes {
-//     &self.key
-//   }
-
-//   /// Returns the value of the entry.
-//   #[inline]
-//   pub const fn value(&self) -> &Bytes {
-//     &self.value
-//   }
-
-//   /// Returns the metadata of the entry.
-//   #[inline]
-//   pub const fn meta(&self) -> Meta {
-//     self.meta
-//   }
-// }
 
 /// Value pointer encode/decode error.
 #[derive(Debug, Copy, Clone)]
@@ -466,35 +403,5 @@ impl Pointer {
     );
 
     Ok((encoded_size, Self { fid, size, offset }))
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_meta() {
-    let meta = Meta::new(0);
-    assert_eq!(meta.version(), 0);
-    assert!(!meta.is_pointer());
-
-    let meta = Meta::new(100);
-    assert_eq!(meta.version(), 100);
-    assert!(!meta.is_pointer());
-
-    assert_eq!(
-      format!("{:?}", meta),
-      "Meta { version: 101, pointer: false, checksum: 0 }"
-    );
-
-    let meta = Meta::value_pointer(102);
-    assert_eq!(meta.version(), 102);
-    assert!(meta.is_pointer());
-
-    assert_eq!(
-      format!("{:?}", meta),
-      "Meta { version: 102, pointer: true, checksum: 0 }"
-    );
   }
 }

@@ -2,7 +2,7 @@
 //!
 //! [prost]: https://github.com/tokio-rs/prost/blob/master/prost/src/encoding.rs.
 
-use crate::error::ChecksumMismatch;
+// use crate::error::ChecksumMismatch;
 
 use core::iter::Iterator;
 use core::result::Result;
@@ -201,23 +201,23 @@ pub(crate) fn checksum(meta: u64, key: &[u8], value: Option<&[u8]>) -> u32 {
   h.finalize()
 }
 
-#[inline]
-pub(crate) fn validate_checksum(
-  version: u64,
-  key: &[u8],
-  value: Option<&[u8]>,
-  cks: u32,
-) -> Result<(), ChecksumMismatch> {
-  let mut h = crc32fast::Hasher::new();
-  h.update(key);
-  if let Some(value) = value {
-    h.update(value);
-  }
-  h.update(&version.to_le_bytes());
+// #[inline]
+// pub(crate) fn validate_checksum(
+//   version: u64,
+//   key: &[u8],
+//   value: Option<&[u8]>,
+//   cks: u32,
+// ) -> Result<(), ChecksumMismatch> {
+//   let mut h = crc32fast::Hasher::new();
+//   h.update(key);
+//   if let Some(value) = value {
+//     h.update(value);
+//   }
+//   h.update(&version.to_le_bytes());
 
-  if h.finalize() != cks {
-    Err(ChecksumMismatch)
-  } else {
-    Ok(())
-  }
-}
+//   if h.finalize() != cks {
+//     Err(ChecksumMismatch)
+//   } else {
+//     Ok(())
+//   }
+// }
