@@ -6,7 +6,7 @@ use dbutils::{
   StaticComparator,
 };
 
-use super::{key::Key, meta::Meta};
+use super::{key::Key, meta::Meta, query::Query};
 
 /// A reference to a internal key.
 pub struct KeyRef<'a, C> {
@@ -24,6 +24,12 @@ impl<'a, C> KeyRef<'a, C> {
       data,
       _phantom: PhantomData,
     }
+  }
+
+  /// Returns the version of this key reference.
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.meta.version()
   }
 }
 
@@ -81,7 +87,7 @@ impl<'a, C> TypeRef<'a> for KeyRef<'a, C> {
   }
 }
 
-impl<'a, C: StaticComparator> dbutils::traits::KeyRef<'a, Key<C>> for KeyRef<'a, C> {
+impl<'a, 'b, C: StaticComparator> dbutils::traits::KeyRef<'b, Key<C>> for KeyRef<'a, C> {
   #[inline]
   fn compare<Q>(&self, a: &Q) -> cmp::Ordering
   where
@@ -131,5 +137,25 @@ where
 {
   fn compare(&self, key: &KeyRef<'a, C>) -> std::cmp::Ordering {
     C::compare(&self.data, key.data).then_with(|| self.meta.version().cmp(&key.meta.version()))
+  }
+}
+
+impl<'a, C> Equivalent<KeyRef<'_, C>> for Query<'a, [u8], Key<C>>
+where
+  C: StaticComparator,
+{
+  #[inline]
+  fn equivalent(&self, key: &KeyRef<'_, C>) -> bool {
+    C::compare(self.key, key.data).is_eq() && self.meta.version() == key.version()
+  }
+}
+
+impl<'a, C> Comparable<KeyRef<'_, C>> for Query<'a, [u8], Key<C>>
+where
+  C: StaticComparator,
+{
+  #[inline]
+  fn compare(&self, key: &KeyRef<'_, C>) -> cmp::Ordering {
+    C::compare(self.key, key.data).then_with(|| self.meta.version().cmp(&key.version()))
   }
 }

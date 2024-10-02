@@ -18,3 +18,6 @@ pub mod entry_ref;
 
 /// The reference to a generic entry in the database.
 pub mod generic_entry_ref;
+
+/// A type used for lookups in the database.
+pub mod query;

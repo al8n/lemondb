@@ -149,7 +149,7 @@ impl Meta {
 
   /// Returns the version.
   #[inline]
-  pub fn version(&self) -> u64 {
+  pub const fn version(&self) -> u64 {
     self.meta & Self::VERSION_MASK
   }
 

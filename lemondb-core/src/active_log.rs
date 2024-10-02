@@ -6,85 +6,9 @@ use orderwal::{
   Crc32, KeyBuilder,
 };
 
-use core::{
-  cmp, mem,
-  ops::{Bound, RangeBounds},
-};
+use core::mem;
 
-use super::types::{entry_ref::EntryRef, key::Key, key_ref::KeyRef, meta::Meta};
-
-#[derive(Debug)]
-pub(crate) struct ComparatorWrapper<C>(C);
-
-impl<C: StaticComparator> StaticComparator for ComparatorWrapper<C> {
-  #[inline]
-  fn compare(a: &[u8], b: &[u8]) -> cmp::Ordering {
-    let alen = a.len();
-    let blen = b.len();
-
-    let ak = &a[..alen - Meta::SIZE];
-    let av = Meta::decode_version(&a[alen - Meta::SIZE..]);
-    let bk = &b[..blen - Meta::SIZE];
-    let bv = Meta::decode_version(&b[blen - Meta::SIZE..]);
-
-    C::compare(ak, bk).then_with(|| av.cmp(&bv))
-  }
-
-  #[inline]
-  fn contains(start_bound: Bound<&[u8]>, end_bound: Bound<&[u8]>, key: &[u8]) -> bool {
-    let (start_bound, start_bound_version) = match start_bound {
-      Bound::Included(b) => {
-        let len = b.len();
-        let k = &b[..len - Meta::SIZE];
-        let meta_buf = &b[len - Meta::SIZE..];
-        (
-          Bound::Included(k),
-          Bound::Included(Meta::decode_version(meta_buf)),
-        )
-      }
-      Bound::Excluded(b) => {
-        let len = b.len();
-        let k = &b[..len - Meta::SIZE];
-        let meta_buf = &b[len - Meta::SIZE..];
-        (
-          Bound::Included(k),
-          Bound::Excluded(Meta::decode_version(meta_buf)),
-        )
-      }
-      Bound::Unbounded => (Bound::Unbounded, Bound::Unbounded),
-    };
-
-    let (end_bound, end_bound_version) = match end_bound {
-      Bound::Included(b) => {
-        let len = b.len();
-        let k = &b[..len - Meta::SIZE];
-        let meta_buf = &b[len - Meta::SIZE..];
-        (
-          Bound::Included(k),
-          Bound::Included(Meta::decode_version(meta_buf)),
-        )
-      }
-      Bound::Excluded(b) => {
-        let len = b.len();
-        let k = &b[..len - Meta::SIZE];
-        let meta_buf = &b[len - Meta::SIZE..];
-        (
-          Bound::Included(k),
-          Bound::Excluded(Meta::decode_version(meta_buf)),
-        )
-      }
-      Bound::Unbounded => (Bound::Unbounded, Bound::Unbounded),
-    };
-
-    let len = key.len();
-    let k = &key[..len - Meta::SIZE];
-    let meta_buf = &key[len - Meta::SIZE..];
-    let key_version = Meta::decode_version(meta_buf);
-
-    C::contains(start_bound, end_bound, k)
-      && (start_bound_version, end_bound_version).contains(&key_version)
-  }
-}
+use super::types::{entry_ref::EntryRef, key::Key, key_ref::KeyRef, meta::Meta, query::Query};
 
 /// The reader of the active log file.
 pub struct ActiveLogFileReader<C = Ascend, S = Crc32>(GenericWalReader<Key<C>, [u8], S>);
@@ -96,25 +20,27 @@ where
   /// Returns `true` if the active log contains the key.
   #[inline]
   pub fn contains_key(&self, version: u64, key: &[u8]) -> bool {
-    self.0.contains_key(&KeyRef::new(Meta::query(version), key))
+    self.0.contains_key(&Query::new(Meta::query(version), key))
   }
 
   /// Get the entry by the key and version.
   #[inline]
-  pub fn get<'a>(&'a self, version: u64, key: &'a [u8]) -> Option<EntryRef<'a, C>> {
-    let k = KeyRef::new(Meta::query(version), key);
-    self.0.get(&k).map(|ent| {
-      let k = ent.key();
-      let v = ent.value();
+  pub fn get<'a>(&'a self, version: u64, key: &[u8]) -> Option<EntryRef<'a, C>> {
+    self
+      .0
+      .get(&Query::new(Meta::query(version), key))
+      .map(|ent| {
+        let k = ent.key();
+        let v = ent.value();
 
-      // Safety: the actual lifetime of the key and value is reference to the self.
-      unsafe {
-        EntryRef::new(
-          mem::transmute::<KeyRef<'_, C>, KeyRef<'a, C>>(k),
-          mem::transmute::<&[u8], &'a [u8]>(v.as_ref()),
-        )
-      }
-    })
+        // Safety: the actual lifetime of the key and value is reference to the self.
+        unsafe {
+          EntryRef::new(
+            mem::transmute::<KeyRef<'_, C>, KeyRef<'a, C>>(k),
+            mem::transmute::<&[u8], &'a [u8]>(v.as_ref()),
+          )
+        }
+      })
   }
 }
 

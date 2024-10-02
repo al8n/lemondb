@@ -9,9 +9,7 @@ use orderwal::{
 use core::mem;
 
 use super::types::{
-  generic_entry_ref::GenericEntryRef,
-  generic_key::{GenericKey, GenericQueryKey},
-  meta::Meta,
+  generic_entry_ref::GenericEntryRef, generic_key::GenericKey, meta::Meta, query::Query,
 };
 
 /// The reader of the active log file.
@@ -27,10 +25,12 @@ where
 {
   /// Returns `true` if the active log contains the key.
   #[inline]
-  pub fn contains_key(&self, version: u64, key: Generic<'_, K>) -> bool {
-    self
-      .0
-      .contains_key(&GenericQueryKey::new(Meta::query(version), key))
+  pub fn contains_key<Q>(&self, version: u64, key: &Q) -> bool
+  where
+    Q: ?Sized + Ord + for<'b> Comparable<K::Ref<'b>>,
+  {
+    let k = Query::<Q, K>::new(Meta::query(version), key);
+    self.0.contains_key(&k)
   }
 }
 
@@ -42,8 +42,11 @@ where
 {
   /// Get the entry by the key and version.
   #[inline]
-  pub fn get<'a>(&'a self, version: u64, key: &'a K) -> Option<GenericEntryRef<'a, K, V>> {
-    let k = GenericQueryKey::new(Meta::query(version), key.into());
+  pub fn get<'a, Q>(&'a self, version: u64, key: &Q) -> Option<GenericEntryRef<'a, K, V>>
+  where
+    Q: ?Sized + Ord + for<'b> Comparable<K::Ref<'b>>,
+  {
+    let k = Query::<'_, Q, K>::new(Meta::query(version), key);
     self.0.get(&k).map(|ent| {
       let (meta, k) = ent.key().into_components();
       let v = ent.value();
@@ -52,8 +55,8 @@ where
       unsafe {
         GenericEntryRef::new(
           meta,
-          mem::transmute::<K::Ref<'_>, K::Ref<'a>>(k),
-          mem::transmute::<V::Ref<'_>, V::Ref<'a>>(v),
+          mem::transmute::<K::Ref<'_>, K::Ref<'_>>(k),
+          mem::transmute::<V::Ref<'_>, V::Ref<'_>>(v),
         )
       }
     })

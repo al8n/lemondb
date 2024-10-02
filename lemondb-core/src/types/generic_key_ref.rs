@@ -1,16 +1,11 @@
-use core::{cmp, marker::PhantomData};
+use core::cmp;
 
 use dbutils::{
   equivalent::{Comparable, Equivalent},
   traits::{KeyRef, Type, TypeRef},
-  StaticComparator,
 };
 
-use super::{
-  generic_key::{GenericKey, GenericQueryKey},
-  key::Key,
-  meta::Meta,
-};
+use super::{generic_key::GenericKey, meta::Meta, query::Query};
 
 /// A reference to a internal key.
 pub struct GenericKeyRef<K: ?Sized> {
@@ -27,6 +22,18 @@ impl<K> GenericKeyRef<K> {
   //     data,
   //   }
   // }
+
+  /// Returns the version of this key reference.
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.meta.version()
+  }
+
+  /// Returns the `key` of the `GenericKeyRef`.
+  #[inline]
+  pub fn key(&self) -> &K {
+    &self.data
+  }
 
   /// Consumes the `GenericKeyRef` and returns the `meta` and the `K`.
   #[inline]
@@ -100,63 +107,75 @@ where
   }
 }
 
-impl<'a, K: Type + ?Sized> Equivalent<GenericKeyRef<K::Ref<'a>>> for GenericKey<K> {
-  #[inline]
-  fn equivalent(&self, key: &GenericKeyRef<K::Ref<'a>>) -> bool {
-    todo!()
-  }
-}
-
-impl<'a, K: Type + ?Sized> Comparable<GenericKeyRef<K::Ref<'a>>> for GenericKey<K> {
-  #[inline]
-  fn compare(&self, key: &GenericKeyRef<K::Ref<'a>>) -> cmp::Ordering {
-    todo!()
-  }
-}
-
-impl<'a, K: Type + ?Sized> Equivalent<GenericKey<K>> for GenericKeyRef<K::Ref<'a>> {
+impl<'a, K> Equivalent<GenericKey<K>> for GenericKeyRef<K::Ref<'a>>
+where
+  K: ?Sized + Ord + Type + Equivalent<K::Ref<'a>>,
+  for<'b> K::Ref<'b>: Equivalent<K> + Ord,
+{
   #[inline]
   fn equivalent(&self, key: &GenericKey<K>) -> bool {
-    todo!()
+    self.data.equivalent(&key.data) && self.meta.version() == key.meta.version()
   }
 }
 
-impl<'a, K: Type + ?Sized> Comparable<GenericKey<K>> for GenericKeyRef<K::Ref<'a>> {
+impl<'a, K> Comparable<GenericKey<K>> for GenericKeyRef<K::Ref<'a>>
+where
+  K: ?Sized + Ord + Type + Comparable<K::Ref<'a>>,
+  for<'b> K::Ref<'b>: Comparable<K> + Ord,
+{
   #[inline]
   fn compare(&self, key: &GenericKey<K>) -> cmp::Ordering {
-    todo!()
-  }
-}
-
-impl<'a, K: Type + ?Sized> Equivalent<GenericKeyRef<K::Ref<'a>>> for GenericQueryKey<'a, K> {
-  #[inline]
-  fn equivalent(&self, key: &GenericKeyRef<K::Ref<'a>>) -> bool {
-    todo!()
-  }
-}
-
-impl<'a, K: Type + ?Sized> Comparable<GenericKeyRef<K::Ref<'a>>> for GenericQueryKey<'a, K> {
-  #[inline]
-  fn compare(&self, key: &GenericKeyRef<K::Ref<'a>>) -> cmp::Ordering {
-    todo!()
+    Comparable::compare(&self.data, &key.data).then_with(|| self.meta.version().cmp(&key.meta.version()))
   }
 }
 
 impl<'a, K> KeyRef<'a, GenericKey<K>> for GenericKeyRef<K::Ref<'a>>
 where
   K: ?Sized + Ord + Type + Comparable<K::Ref<'a>>,
-  K::Ref<'a>: Comparable<K> + Ord,
+  for<'b> K::Ref<'b>: Comparable<K> + Ord,
 {
   #[inline]
   fn compare<Q>(&self, a: &Q) -> cmp::Ordering
   where
     Q: ?Sized + Ord + Comparable<Self>,
   {
-    todo!()
+    Comparable::compare(a, self).reverse()
   }
 
   #[inline]
   unsafe fn compare_binary(a: &[u8], b: &[u8]) -> cmp::Ordering {
-    todo!()
+    let alen = a.len();
+    let blen = b.len();
+
+    let ak = &a[..alen - Meta::SIZE];
+    let av = Meta::decode_version(&a[alen - Meta::SIZE..]);
+    let bk = &b[..blen - Meta::SIZE];
+    let bv = Meta::decode_version(&b[blen - Meta::SIZE..]);
+
+    let ak = <K::Ref<'_> as TypeRef<'_>>::from_slice(ak);
+    let bk = <K::Ref<'_> as TypeRef<'_>>::from_slice(bk);
+    ak.cmp(&bk).then_with(|| av.cmp(&bv))
+  }
+}
+
+impl<'a, Q, K> Equivalent<GenericKeyRef<K::Ref<'a>>> for Query<'_, Q, K>
+where
+  K: Type + Ord + ?Sized,
+  Q: ?Sized + Ord + for<'b> Equivalent<K::Ref<'b>>,
+{
+  #[inline]
+  fn equivalent(&self, key: &GenericKeyRef<K::Ref<'a>>) -> bool {
+    self.key.equivalent(key.key()) && self.meta.version() == key.version()
+  }
+}
+
+impl<'a, Q, K> Comparable<GenericKeyRef<K::Ref<'a>>> for Query<'_, Q, K>
+where
+  K: Type + Ord + ?Sized,
+  Q: ?Sized + Ord + for<'b> Comparable<K::Ref<'b>>,
+{
+  #[inline]
+  fn compare(&self, key: &GenericKeyRef<K::Ref<'a>>) -> cmp::Ordering {
+    Comparable::compare(self.key, key.key()).then_with(|| self.meta.version().cmp(&key.version()))
   }
 }
