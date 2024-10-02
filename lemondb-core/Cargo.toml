@@ -1,0 +1,19 @@
+[package]
+name = "lemondb-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["std"]
+alloc = []
+std = []
+
+ttl = ["std", "time"]
+
+[dependencies]
+among.workspace = true
+dbutils.workspace = true
+orderwal.workspace = true
+skl.workspace = true
+zerocopy.workspace = true
+time = { workspace = true, optional = true }

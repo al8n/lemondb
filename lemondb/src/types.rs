@@ -1,9 +1,12 @@
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
+use key::RefKey;
 use skl::Trailer;
 use zerocopy::{FromBytes, FromZeroes};
 
 use crate::util::{decode_varint, encode_varint, encoded_len_varint, VarintError};
+
+pub(crate) mod key;
 
 pub(crate) struct AtomicTableId(AtomicU16);
 
@@ -211,6 +214,25 @@ impl Meta {
     u64::from_le_bytes(<[u8; Self::VERSION_SIZE]>::try_from(&buf[..Self::VERSION_SIZE]).unwrap())
       & Self::VERSION_MASK
   }
+
+  /// ## Panics
+  /// - If the buffer is less than `Meta::SIZE`.
+  #[inline]
+  pub(crate) fn decode(buf: &[u8]) -> Self {
+    let raw = u64::from_le_bytes([
+      buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ]);
+    #[cfg(feature = "ttl")]
+    let expire_at = u64::from_le_bytes([
+      buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+    ]);
+
+    Self {
+      meta: raw,
+      #[cfg(feature = "ttl")]
+      expire_at,
+    }
+  }
 }
 
 impl Meta {
@@ -226,6 +248,18 @@ impl Meta {
       meta: version,
       #[cfg(feature = "ttl")]
       expire_at,
+    }
+  }
+
+  /// Returns a new meta for querying.
+  #[inline]
+  pub const fn query(version: u64) -> Self {
+    assert!(version < (1 << 63), "version is too large");
+
+    Self {
+      meta: version,
+      #[cfg(feature = "ttl")]
+      expire_at: 0,
     }
   }
 
@@ -279,6 +313,19 @@ impl Trailer for Meta {
   #[inline]
   fn is_valid(&self) -> bool {
     self.expire_at <= time::OffsetDateTime::now_utc().unix_timestamp() as u64
+  }
+}
+
+/// A reference to the entry in the database.
+pub struct EntryRef<'a, C> {
+  key: RefKey<'a, C>,
+  value: &'a [u8],
+}
+
+impl<'a, C> EntryRef<'a, C> {
+  #[inline]
+  pub(crate) const fn new(key: RefKey<'a, C>, value: &'a [u8]) -> Self {
+    Self { key, value }
   }
 }
 

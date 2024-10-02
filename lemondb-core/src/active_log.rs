@@ -1,30 +1,17 @@
-use dbutils::{
-  checksum::BuildChecksumer,
-  equivalent::{Comparable, Equivalent},
-  traits::{KeyRef, Type, TypeRef},
-  Ascend, CheapClone, StaticComparator,
-};
+use dbutils::{checksum::BuildChecksumer, Ascend, CheapClone, StaticComparator};
 
 use orderwal::{
   error::Error as ActiveLogError,
-  swmr::{generic::GenericWalReader, wal::OrderWalReader, GenericOrderWal, OrderWal},
-  Crc32, ImmutableWal, KeyBuilder, Wal,
+  swmr::{generic::GenericWalReader, GenericOrderWal},
+  Crc32, KeyBuilder,
 };
-use skl::KeySize;
-use zerocopy::FromBytes;
 
-use core::mem;
-use std::{
-  borrow::Borrow,
-  cmp,
-  marker::PhantomData,
+use core::{
+  cmp, mem,
   ops::{Bound, RangeBounds},
 };
 
-use crate::{
-  key::{Key, RefKey},
-  EntryRef, Meta,
-};
+use super::types::{entry_ref::EntryRef, key::Key, key_ref::KeyRef, meta::Meta};
 
 #[derive(Debug)]
 pub(crate) struct ComparatorWrapper<C>(C);
@@ -99,20 +86,23 @@ impl<C: StaticComparator> StaticComparator for ComparatorWrapper<C> {
   }
 }
 
+/// The reader of the active log file.
 pub struct ActiveLogFileReader<C = Ascend, S = Crc32>(GenericWalReader<Key<C>, [u8], S>);
 
 impl<C, S> ActiveLogFileReader<C, S>
 where
   C: StaticComparator,
 {
+  /// Returns `true` if the active log contains the key.
   #[inline]
   pub fn contains_key(&self, version: u64, key: &[u8]) -> bool {
-    self.0.contains_key(&RefKey::new(Meta::query(version), key))
+    self.0.contains_key(&KeyRef::new(Meta::query(version), key))
   }
 
+  /// Get the entry by the key and version.
   #[inline]
   pub fn get<'a>(&'a self, version: u64, key: &'a [u8]) -> Option<EntryRef<'a, C>> {
-    let k = RefKey::new(Meta::query(version), key);
+    let k = KeyRef::new(Meta::query(version), key);
     self.0.get(&k).map(|ent| {
       let k = ent.key();
       let v = ent.value();
@@ -120,7 +110,7 @@ where
       // Safety: the actual lifetime of the key and value is reference to the self.
       unsafe {
         EntryRef::new(
-          mem::transmute::<RefKey<'_, C>, RefKey<'a, C>>(k),
+          mem::transmute::<KeyRef<'_, C>, KeyRef<'a, C>>(k),
           mem::transmute::<&[u8], &'a [u8]>(v.as_ref()),
         )
       }
@@ -128,6 +118,7 @@ where
   }
 }
 
+/// The active log file.
 pub struct ActiveLogFile<C = Ascend, S = Crc32> {
   wal: GenericOrderWal<Key<C>, [u8], S>,
   max_key_size: u32,
@@ -138,6 +129,7 @@ impl<C, S> ActiveLogFile<C, S>
 where
   C: StaticComparator + CheapClone + Send + 'static,
 {
+  /// Returns a reader of the active log file.
   #[inline]
   pub fn reader(&self) -> ActiveLogFileReader<C, S> {
     ActiveLogFileReader(self.wal.reader())
@@ -149,6 +141,7 @@ where
   C: StaticComparator + CheapClone + Send + 'static,
   S: BuildChecksumer,
 {
+  /// Inserts the key-value pair into the active log file.
   pub fn insert(&mut self, meta: Meta, key: &[u8], value: &[u8]) -> Result<(), ActiveLogError> {
     let klen = mem::size_of::<Meta>() + key.len();
     if klen > self.max_key_size as usize {
