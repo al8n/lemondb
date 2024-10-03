@@ -25,9 +25,9 @@ where
 {
   /// Returns `true` if the active log contains the key.
   #[inline]
-  pub fn contains_key<Q>(&self, version: u64, key: &Q) -> bool
+  pub fn contains_key<'a, Q>(&'a self, version: u64, key: &'a Q) -> bool
   where
-    Q: ?Sized + Ord + for<'b> Comparable<K::Ref<'b>>,
+    Q: ?Sized + Ord + Comparable<K::Ref<'a>>,
   {
     let k = Query::<Q, K>::new(Meta::query(version), key);
     self.0.contains_key(&k)
@@ -42,23 +42,16 @@ where
 {
   /// Get the entry by the key and version.
   #[inline]
-  pub fn get<'a, Q>(&'a self, version: u64, key: &Q) -> Option<GenericEntryRef<'a, K, V>>
+  pub fn get<'a, Q>(&'a self, version: u64, key: &'a Q) -> Option<GenericEntryRef<'a, K, V>>
   where
-    Q: ?Sized + Ord + for<'b> Comparable<K::Ref<'b>>,
+    Q: ?Sized + Ord + Comparable<K::Ref<'a>>,
   {
     let k = Query::<'_, Q, K>::new(Meta::query(version), key);
     self.0.get(&k).map(|ent| {
       let (meta, k) = ent.key().into_components();
       let v = ent.value();
 
-      // Safety: the actual lifetime of the key and value is reference to the self.
-      unsafe {
-        GenericEntryRef::new(
-          meta,
-          mem::transmute::<K::Ref<'_>, K::Ref<'_>>(k),
-          mem::transmute::<V::Ref<'_>, V::Ref<'_>>(v),
-        )
-      }
+      GenericEntryRef::new(meta, k, v)
     })
   }
 }

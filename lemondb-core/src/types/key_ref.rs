@@ -31,6 +31,20 @@ impl<'a, C> KeyRef<'a, C> {
   pub const fn version(&self) -> u64 {
     self.meta.version()
   }
+
+  /// Returns the expiration time of this key reference.
+  #[inline]
+  #[cfg(feature = "ttl")]
+  #[cfg_attr(docsrs, doc(cfg(feature = "ttl")))]
+  pub const fn expire_at(&self) -> u64 {
+    self.meta.expire_at()
+  }
+
+  /// Returns the `key` of the `KeyRef`.
+  #[inline]
+  pub const fn key(&self) -> &[u8] {
+    self.data
+  }
 }
 
 impl<'a, C> PartialEq for KeyRef<'a, C> {

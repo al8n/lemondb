@@ -8,7 +8,7 @@ use orderwal::{
 
 use core::mem;
 
-use super::types::{entry_ref::EntryRef, key::Key, key_ref::KeyRef, meta::Meta, query::Query};
+use super::types::{entry_ref::EntryRef, key::Key, meta::Meta, query::Query};
 
 /// The reader of the active log file.
 pub struct ActiveLogFileReader<C = Ascend, S = Crc32>(GenericWalReader<Key<C>, [u8], S>);
@@ -33,13 +33,7 @@ where
         let k = ent.key();
         let v = ent.value();
 
-        // Safety: the actual lifetime of the key and value is reference to the self.
-        unsafe {
-          EntryRef::new(
-            mem::transmute::<KeyRef<'_, C>, KeyRef<'a, C>>(k),
-            mem::transmute::<&[u8], &'a [u8]>(v.as_ref()),
-          )
-        }
+        EntryRef::new(k, v)
       })
   }
 }

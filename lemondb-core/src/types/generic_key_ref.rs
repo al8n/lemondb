@@ -125,7 +125,8 @@ where
 {
   #[inline]
   fn compare(&self, key: &GenericKey<K>) -> cmp::Ordering {
-    Comparable::compare(&self.data, &key.data).then_with(|| self.meta.version().cmp(&key.meta.version()))
+    Comparable::compare(&self.data, &key.data)
+      .then_with(|| self.meta.version().cmp(&key.meta.version()))
   }
 }
 
@@ -158,24 +159,25 @@ where
   }
 }
 
-impl<'a, Q, K> Equivalent<GenericKeyRef<K::Ref<'a>>> for Query<'_, Q, K>
+impl<'a, 'b: 'a, Q, K> Equivalent<GenericKeyRef<K::Ref<'a>>> for Query<'b, Q, K>
 where
   K: Type + Ord + ?Sized,
-  Q: ?Sized + Ord + for<'b> Equivalent<K::Ref<'b>>,
+  Q: ?Sized + Ord + Equivalent<K::Ref<'a>>,
 {
   #[inline]
   fn equivalent(&self, key: &GenericKeyRef<K::Ref<'a>>) -> bool {
-    self.key.equivalent(key.key()) && self.meta.version() == key.version()
+    self.key.equivalent(&key.data) && self.meta.version() == key.version()
   }
 }
 
-impl<'a, Q, K> Comparable<GenericKeyRef<K::Ref<'a>>> for Query<'_, Q, K>
+impl<'a, 'b: 'a, Q, K> Comparable<GenericKeyRef<K::Ref<'a>>> for Query<'b, Q, K>
 where
   K: Type + Ord + ?Sized,
-  Q: ?Sized + Ord + for<'b> Comparable<K::Ref<'b>>,
+  Q: ?Sized + Ord + Comparable<K::Ref<'a>>,
 {
   #[inline]
   fn compare(&self, key: &GenericKeyRef<K::Ref<'a>>) -> cmp::Ordering {
-    Comparable::compare(self.key, key.key()).then_with(|| self.meta.version().cmp(&key.version()))
+    Comparable::compare(self.key, &key.data)
+      .then_with(move || self.meta.version().cmp(&key.version()))
   }
 }
