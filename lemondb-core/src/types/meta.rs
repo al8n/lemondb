@@ -95,6 +95,8 @@ impl Meta {
 }
 
 impl Meta {
+  /// The maximum version.
+  pub const MAX_VERSION: u64 = (1 << 63) - 1;
   pub(crate) const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
   pub(crate) const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
 
@@ -112,7 +114,7 @@ impl Meta {
 
   /// Returns a new meta for lookup.
   #[inline]
-  pub const fn query(version: u64) -> Self {
+  pub(crate) const fn query(version: u64) -> Self {
     assert!(version < (1 << 63), "version is too large");
 
     Self {

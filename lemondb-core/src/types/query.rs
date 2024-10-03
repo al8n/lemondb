@@ -60,6 +60,6 @@ where
     self
       .key
       .cmp(other.key)
-      .then_with(|| self.meta.version().cmp(&other.meta.version()))
+      .then_with(|| other.meta.version().cmp(&self.meta.version())) // in this way, we can make sure the latest version is at the front
   }
 }

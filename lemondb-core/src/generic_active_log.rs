@@ -2,7 +2,7 @@ use among::Among;
 use dbutils::{checksum::BuildChecksumer, equivalent::Comparable, traits::Type};
 use orderwal::{
   error::Error as ActiveLogError,
-  swmr::{generic::GenericWalReader, GenericOrderWal},
+  swmr::{generic::GenericOrderWalReader, GenericOrderWal},
   Crc32, Generic, KeyBuilder,
 };
 
@@ -14,7 +14,7 @@ use super::types::{
 
 /// The reader of the active log file.
 pub struct ActiveLogFileReader<K: ?Sized, V: ?Sized, S = Crc32>(
-  GenericWalReader<GenericKey<K>, V, S>,
+  GenericOrderWalReader<GenericKey<K>, V, S>,
 );
 
 impl<K, V, S> ActiveLogFileReader<K, V, S>
@@ -47,12 +47,7 @@ where
     Q: ?Sized + Ord + Comparable<K::Ref<'a>>,
   {
     let k = Query::<'_, Q, K>::new(Meta::query(version), key);
-    self.0.get(&k).map(|ent| {
-      let (meta, k) = ent.key().into_components();
-      let v = ent.value();
-
-      GenericEntryRef::new(meta, k, v)
-    })
+    self.0.get(&k).map(GenericEntryRef::new)
   }
 }
 

@@ -30,7 +30,8 @@ impl<C: StaticComparator> PartialOrd for Key<C> {
 impl<C: StaticComparator> Ord for Key<C> {
   #[inline]
   fn cmp(&self, other: &Self) -> cmp::Ordering {
-    C::compare(&self.data, &other.data).then_with(|| self.meta.version().cmp(&other.meta.version()))
+    C::compare(&self.data, &other.data).then_with(|| other.meta.version().cmp(&self.meta.version()))
+    // make sure latest version at the front
   }
 }
 

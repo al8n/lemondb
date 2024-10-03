@@ -41,7 +41,7 @@ where
     self
       .data
       .cmp(&other.data)
-      .then_with(|| self.meta.version().cmp(&other.meta.version()))
+      .then_with(|| other.meta.version().cmp(&self.meta.version())) // make sure latest version at the front
   }
 }
 

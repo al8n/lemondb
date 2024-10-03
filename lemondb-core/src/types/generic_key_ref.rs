@@ -29,9 +29,17 @@ impl<K> GenericKeyRef<K> {
     self.meta.version()
   }
 
+  /// Returns the expiration time of this key reference.
+  #[cfg(feature = "ttl")]
+  #[cfg_attr(docsrs, doc(cfg(feature = "ttl")))]
+  #[inline]
+  pub const fn expire_at(&self) -> u64 {
+    self.meta.expire_at()
+  }
+
   /// Returns the `key` of the `GenericKeyRef`.
   #[inline]
-  pub fn key(&self) -> &K {
+  pub const fn key(&self) -> &K {
     &self.data
   }
 
@@ -73,7 +81,7 @@ where
     self
       .data
       .cmp(&other.data)
-      .then_with(|| self.meta.version().cmp(&other.meta.version()))
+      .then_with(|| other.meta.version().cmp(&self.meta.version())) // make sure the latest version is at the front
   }
 }
 
@@ -126,7 +134,7 @@ where
   #[inline]
   fn compare(&self, key: &GenericKey<K>) -> cmp::Ordering {
     Comparable::compare(&self.data, &key.data)
-      .then_with(|| self.meta.version().cmp(&key.meta.version()))
+      .then_with(|| key.meta.version().cmp(&self.meta.version())) // make sure latest version at the front
   }
 }
 
@@ -155,7 +163,7 @@ where
 
     let ak = <K::Ref<'_> as TypeRef<'_>>::from_slice(ak);
     let bk = <K::Ref<'_> as TypeRef<'_>>::from_slice(bk);
-    ak.cmp(&bk).then_with(|| av.cmp(&bv))
+    ak.cmp(&bk).then_with(|| bv.cmp(&av)) // make sure latest version at the front
   }
 }
 
@@ -178,6 +186,6 @@ where
   #[inline]
   fn compare(&self, key: &GenericKeyRef<K::Ref<'a>>) -> cmp::Ordering {
     Comparable::compare(self.key, &key.data)
-      .then_with(move || self.meta.version().cmp(&key.version()))
+      .then_with(move || key.meta.version().cmp(&self.meta.version())) // make sure latest version at the front
   }
 }

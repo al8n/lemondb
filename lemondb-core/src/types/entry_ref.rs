@@ -1,34 +1,32 @@
-use super::key_ref::KeyRef;
+use super::key::Key;
+use orderwal::swmr::generic::GenericEntryRef;
 
 /// A reference to the entry in the database.
-pub struct EntryRef<'a, C> {
-  key: KeyRef<'a, C>,
-  value: &'a [u8],
-}
+pub struct EntryRef<'a, C>(GenericEntryRef<'a, Key<C>, [u8]>);
 
 impl<'a, C> EntryRef<'a, C> {
   /// Creates a new entry reference.
   #[inline]
-  pub const fn new(key: KeyRef<'a, C>, value: &'a [u8]) -> Self {
-    Self { key, value }
+  pub const fn new(ent: GenericEntryRef<'a, Key<C>, [u8]>) -> Self {
+    Self(ent)
   }
 
   /// Returns the key of this entry reference.
   #[inline]
   pub const fn key(&self) -> &[u8] {
-    self.key.key()
+    self.0.key().key()
   }
 
   /// Returns the value of this entry reference.
   #[inline]
-  pub const fn value(&self) -> &'a [u8] {
-    self.value
+  pub fn value(&self) -> &[u8] {
+    self.0.value().as_ref()
   }
 
   /// Returns the version of this entry reference.
   #[inline]
   pub const fn version(&self) -> u64 {
-    self.key.version()
+    self.0.key().version()
   }
 
   /// Returns the expiration time of this entry reference.
@@ -36,6 +34,6 @@ impl<'a, C> EntryRef<'a, C> {
   #[cfg(feature = "ttl")]
   #[cfg_attr(docsrs, doc(cfg(feature = "ttl")))]
   pub const fn expire_at(&self) -> u64 {
-    self.key.expire_at()
+    self.0.key().expire_at()
   }
 }

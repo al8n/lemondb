@@ -72,7 +72,8 @@ where
 {
   #[inline]
   fn cmp(&self, other: &Self) -> cmp::Ordering {
-    C::compare(self.data, other.data).then_with(|| self.meta.version().cmp(&other.meta.version()))
+    C::compare(self.data, other.data).then_with(|| other.meta.version().cmp(&self.meta.version()))
+    // make sure latest version at the front
   }
 }
 
@@ -120,7 +121,7 @@ impl<'a, 'b, C: StaticComparator> dbutils::traits::KeyRef<'b, Key<C>> for KeyRef
     let bk = &b[..blen - Meta::SIZE];
     let bv = Meta::decode_version(&b[blen - Meta::SIZE..]);
 
-    C::compare(ak, bk).then_with(|| av.cmp(&bv))
+    C::compare(ak, bk).then_with(|| bv.cmp(&av)) // make sure latest version at the front
   }
 }
 
@@ -135,7 +136,8 @@ where
   C: StaticComparator,
 {
   fn compare(&self, key: &Key<C>) -> std::cmp::Ordering {
-    C::compare(self.data, &key.data).then_with(|| self.meta.version().cmp(&key.meta.version()))
+    C::compare(self.data, &key.data).then_with(|| key.meta.version().cmp(&self.meta.version()))
+    // make sure latest version at the front
   }
 }
 
@@ -150,7 +152,8 @@ where
   C: StaticComparator,
 {
   fn compare(&self, key: &KeyRef<'a, C>) -> std::cmp::Ordering {
-    C::compare(&self.data, key.data).then_with(|| self.meta.version().cmp(&key.meta.version()))
+    C::compare(&self.data, key.data).then_with(|| key.meta.version().cmp(&self.meta.version()))
+    // make sure latest version at the front
   }
 }
 
@@ -170,6 +173,7 @@ where
 {
   #[inline]
   fn compare(&self, key: &KeyRef<'_, C>) -> cmp::Ordering {
-    C::compare(self.key, key.data).then_with(|| self.meta.version().cmp(&key.version()))
+    C::compare(self.key, key.data).then_with(|| key.meta.version().cmp(&self.meta.version()))
+    // make sure latest version at the front
   }
 }
