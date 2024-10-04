@@ -1,29 +1,28 @@
-use skl::Trailer;
 use zerocopy::{FromBytes, FromZeroes};
 
-/// The metadata for the skip log.
+/// The metadata for the value log.
 ///
 /// The metadata is in the following layout:
 ///
 /// - With `ttl` feature enabled:
 ///
 ///   ```text
-///   +---------------------+----------------------------------+------------------------+
-///   | 63 bits for version |   1 bit for value pointer mark   | 64 bits for expiration |
-///   +---------------------+----------------------------------+------------------------+
+///   +---------------------+------------------------------+------------------------+
+///   | 63 bits for version |   1 bit for tombstone mark   | 64 bits for expiration |
+///   +---------------------+------------------------------+------------------------+
 ///   ```
 ///
 /// - Without `ttl` feature enabled:
 ///
 ///   ```text
 ///   +---------------------+----------------------------------+
-///   | 63 bits for version |   1 bit for value pointer mark   |
+///   | 63 bits for version |   1 bit for tombstone mark   |
 ///   +---------------------+----------------------------------+
 ///   ```
 #[derive(Copy, Clone, Eq, PartialEq, FromZeroes, FromBytes)]
 #[repr(C, align(8))]
 pub struct Meta {
-  /// 63 bits for version, 1 bit for value pointer mark
+  /// 63 bits for version, 1 bit for tombstone mark
   meta: u64,
   #[cfg(feature = "ttl")]
   expire_at: u64,
@@ -58,7 +57,7 @@ impl Meta {
   ) -> core::fmt::DebugStruct<'a, 'b> {
     let mut s = f.debug_struct("Meta");
     s.field("version", &self.version())
-      .field("pointer", &self.is_pointer());
+      .field("pointer", &self.is_tombstone());
     s
   }
 
@@ -109,7 +108,7 @@ impl Meta {
   /// The maximum version.
   pub const MAX_VERSION: u64 = (1 << 63) - 1;
   pub(crate) const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
-  pub(crate) const VALUE_POINTER_FLAG: u64 = 1 << 63; // 64th bit for value pointer mark
+  pub(crate) const TOMBSTONE_FLAG: u64 = 1 << 63; // 64th bit for tombstone mark
 
   /// Create a new metadata with the given version.
   #[inline]
@@ -123,24 +122,12 @@ impl Meta {
     }
   }
 
-  /// Returns a new meta for lookup.
+  /// Create a new metadata with the given version and toggle the tombstone flag.
   #[inline]
-  pub(crate) const fn query(version: u64) -> Self {
+  pub const fn tombstone(mut version: u64, #[cfg(feature = "ttl")] expire_at: u64) -> Self {
     assert!(version < (1 << 63), "version is too large");
 
-    Self {
-      meta: version,
-      #[cfg(feature = "ttl")]
-      expire_at: 0,
-    }
-  }
-
-  /// Create a new metadata with the given version and toggle the value pointer flag.
-  #[inline]
-  pub const fn pointer(mut version: u64, #[cfg(feature = "ttl")] expire_at: u64) -> Self {
-    assert!(version < (1 << 63), "version is too large");
-
-    version |= Self::VALUE_POINTER_FLAG;
+    version |= Self::TOMBSTONE_FLAG;
     Self {
       meta: version,
       #[cfg(feature = "ttl")]
@@ -148,16 +135,23 @@ impl Meta {
     }
   }
 
-  /// Set the value pointer flag.
+  /// Set the tombstone flag.
   #[inline]
-  pub fn set_pointer(&mut self) {
-    self.meta |= Self::VALUE_POINTER_FLAG;
+  pub fn with_tombstone(mut self) -> Self {
+    self.meta |= Self::TOMBSTONE_FLAG;
+    self
   }
 
-  /// Returns `true` if the value of the entry is a value pointer.
+  /// Set the tombstone flag.
   #[inline]
-  pub const fn is_pointer(&self) -> bool {
-    self.meta & Self::VALUE_POINTER_FLAG != 0
+  pub fn set_tombstone(&mut self) {
+    self.meta |= Self::TOMBSTONE_FLAG;
+  }
+
+  /// Returns `true` if the value of the entry is a tombstone.
+  #[inline]
+  pub const fn is_tombstone(&self) -> bool {
+    self.meta & Self::TOMBSTONE_FLAG != 0
   }
 
   /// Returns the version.
@@ -173,22 +167,20 @@ impl Meta {
     self.expire_at
   }
 
-  /// Returns the value pointer marker bit and version bits as a `u64`.
+  /// Returns the tombstone marker bit and version bits as a `u64`.
   #[inline]
   pub const fn raw(&self) -> u64 {
     self.meta
   }
 }
 
-impl Trailer for Meta {
-  #[cfg(feature = "ttl")]
+impl From<crate::types::meta::Meta> for Meta {
   #[inline]
-  fn is_valid(&self) -> bool {
-    // If the expiration time is 0, then it never expires.
-    if self.expire_at == 0 {
-      return true;
-    }
-
-    self.expire_at <= crate::utils::now_timestamp()
+  fn from(meta: crate::types::meta::Meta) -> Self {
+    Self::new(
+      meta.version(),
+      #[cfg(feature = "ttl")]
+      meta.expire_at(),
+    )
   }
 }

@@ -13,6 +13,7 @@ ttl = ["std", "time"]
 [dependencies]
 among.workspace = true
 dbutils.workspace = true
+dtlog.workspace = true
 orderwal.workspace = true
 ref-cast.workspace = true
 skl.workspace = true

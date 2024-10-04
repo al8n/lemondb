@@ -3,6 +3,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, allow(unused_attributes))]
 #![deny(missing_docs)]
+#![allow(clippy::type_complexity)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc as std;
@@ -24,3 +25,6 @@ pub mod types;
 
 /// Utility functions.
 pub mod utils;
+
+/// The value log used by the database.
+pub mod value_log;

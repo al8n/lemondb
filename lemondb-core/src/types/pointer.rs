@@ -2,7 +2,6 @@ use core::mem;
 
 use valog::ValuePointer;
 
-
 /// Returned when the encoded buffer is too small to hold the bytes format of the [`Pointer`].
 #[derive(Debug)]
 pub struct InsufficientBuffer {
@@ -57,7 +56,6 @@ impl core::fmt::Display for IncompleteBuffer {
 
 impl core::error::Error for IncompleteBuffer {}
 
-
 /// A pointer which points to an entry with a large value in value log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pointer(ValuePointer<u64>);
@@ -68,8 +66,8 @@ impl Pointer {
 
   /// Creates a new `ValuePointer` with the given `offset` and `size`.
   #[inline]
-  pub const fn new(id: u64, offset: u32, size: u32) -> Self {
-    Self(ValuePointer::new(id, offset, size))
+  pub(crate) const fn new(ptr: ValuePointer<u64>) -> Self {
+    Self(ptr)
   }
 
   /// Returns the offset of the value.
@@ -112,10 +110,12 @@ impl Pointer {
       return Err(IncompleteBuffer::new(Self::ENCODED_LEN, buf_len));
     }
 
-    let id = u64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]);
+    let id = u64::from_le_bytes([
+      buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ]);
     let offset = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
     let size = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
 
-    Ok(Self::new(id, offset, size))
+    Ok(Self::new(ValuePointer::new(id, offset, size)))
   }
 }

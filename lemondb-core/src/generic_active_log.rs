@@ -272,6 +272,7 @@ where
       buf.set_len(klen);
       key.encode(buf)?;
       buf.put_u64_le_unchecked(meta.raw());
+      #[cfg(feature = "ttl")]
       buf.put_u64_le_unchecked(meta.expire_at());
 
       Ok(())

@@ -244,6 +244,7 @@ where
     let kb = KeyBuilder::once(klen as u32, |buf| {
       buf.put_slice_unchecked(key);
       buf.put_u64_le_unchecked(meta.raw());
+      #[cfg(feature = "ttl")]
       buf.put_u64_le_unchecked(meta.expire_at());
 
       Ok(())
