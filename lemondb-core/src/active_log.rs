@@ -18,6 +18,29 @@ use super::types::{entry_ref::EntryRef, key::Key, meta::Meta, query::Query};
 /// The reader of the active log file.
 pub struct ActiveLogFileReader<C = Ascend, S = Crc32>(Arc<Inner<C, S>>);
 
+impl<C, S> ActiveLogFileReader<C, S> {
+  /// Returns the maximum version in the active log.
+  #[inline]
+  pub fn max_version(&self) -> u64 {
+    self.0.max_version.load(Ordering::Acquire)
+  }
+
+  /// Returns the minimum version in the active log.
+  #[inline]
+  pub fn min_version(&self) -> u64 {
+    self.0.min_version.load(Ordering::Acquire)
+  }
+
+  /// Returns `true` if the active log contains the version.
+  #[inline]
+  pub fn contains_version(&self, version: u64) -> bool {
+    let min = self.min_version();
+    let max = self.max_version();
+
+    min <= version && version <= max
+  }
+}
+
 impl<C, S> ActiveLogFileReader<C, S>
 where
   C: StaticComparator,
@@ -157,27 +180,6 @@ where
         None
       })
       .flatten()
-  }
-
-  /// Returns the maximum version in the active log.
-  #[inline]
-  pub fn max_version(&self) -> u64 {
-    self.0.max_version.load(Ordering::Acquire)
-  }
-
-  /// Returns the minimum version in the active log.
-  #[inline]
-  pub fn min_version(&self) -> u64 {
-    self.0.min_version.load(Ordering::Acquire)
-  }
-
-  /// Returns `true` if the active log contains the version.
-  #[inline]
-  pub fn contains_version(&self, version: u64) -> bool {
-    let min = self.min_version();
-    let max = self.max_version();
-
-    min <= version && version <= max
   }
 }
 
