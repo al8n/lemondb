@@ -27,7 +27,7 @@ aol = { version = "0.1", default-features = false, features = ["std"] }
 dtlog = { version = "0.1", default-features = false, features = ["memmap"] }
 orderwal = { version = "0.4", path = "../orderwal", default-features = false, features = ["std"] }
 skl = { version = "0.16", path = "../skl-rs", default-features = false, features = ["memmap"] }
-valog = { version = "0.1", default-features = false, features = ["memmap"] }
+valog = { version = "0.1", path = "../valog", default-features = false, features = ["memmap"] }
 ref-cast = "1"
 
 smallvec-wrapper = { version = "0.1", default-features = false, features = ["const_new"] }

@@ -1,13 +1,16 @@
-use super::key::Key;
+use super::{
+  key::Key,
+  value::{PhantomValue, ValueRef},
+};
 use orderwal::swmr::generic::GenericEntryRef;
 
 /// A reference to the entry in the database.
-pub struct EntryRef<'a, C>(GenericEntryRef<'a, Key<C>, [u8]>);
+pub struct EntryRef<'a, C>(GenericEntryRef<'a, Key<C>, PhantomValue>);
 
 impl<'a, C> EntryRef<'a, C> {
   /// Creates a new entry reference.
   #[inline]
-  pub const fn new(ent: GenericEntryRef<'a, Key<C>, [u8]>) -> Self {
+  pub const fn new(ent: GenericEntryRef<'a, Key<C>, PhantomValue>) -> Self {
     Self(ent)
   }
 
@@ -19,8 +22,8 @@ impl<'a, C> EntryRef<'a, C> {
 
   /// Returns the value of this entry reference.
   #[inline]
-  pub fn value(&self) -> &[u8] {
-    self.0.value().as_ref()
+  pub fn value(&self) -> &ValueRef<'a> {
+    self.0.value()
   }
 
   /// Returns the version of this entry reference.

@@ -1,9 +1,12 @@
-use super::generic_key::GenericKey;
+use super::{
+  generic_key::GenericKey,
+  generic_value::{GenericValueRef, PhantomGenericValue},
+};
 use dbutils::traits::Type;
 use orderwal::swmr::generic::GenericEntryRef as EntryRef;
 
 /// A reference to the entry in the database.
-pub struct GenericEntryRef<'a, K, V>(EntryRef<'a, GenericKey<K>, V>)
+pub struct GenericEntryRef<'a, K, V>(EntryRef<'a, GenericKey<K>, PhantomGenericValue<V>>)
 where
   K: Type + ?Sized,
   V: Type + ?Sized;
@@ -15,7 +18,7 @@ where
 {
   /// Creates a new entry reference.
   #[inline]
-  pub const fn new(ent: EntryRef<'a, GenericKey<K>, V>) -> Self {
+  pub const fn new(ent: EntryRef<'a, GenericKey<K>, PhantomGenericValue<V>>) -> Self {
     Self(ent)
   }
 
@@ -33,7 +36,7 @@ where
 
   /// Returns the value of this entry reference.
   #[inline]
-  pub const fn value(&self) -> &V::Ref<'a> {
+  pub const fn value(&self) -> &GenericValueRef<'a, V> {
     self.0.value()
   }
 

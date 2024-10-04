@@ -11,9 +11,12 @@ std = []
 ttl = ["std", "time"]
 
 [dependencies]
+arbitrary-int = { version = "1.2", default-features = false }
 among.workspace = true
+derive_more.workspace = true
 dbutils.workspace = true
 dtlog.workspace = true
+either.workspace = true
 orderwal.workspace = true
 ref-cast.workspace = true
 skl.workspace = true

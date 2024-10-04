@@ -1,9 +1,10 @@
 use among::Among;
 use dbutils::{checksum::BuildChecksumer, equivalent::Comparable, traits::Type};
+use either::Either;
 use orderwal::{
   error::Error as ActiveLogError,
   swmr::{generic::GenericOrderWalReader, GenericOrderWal},
-  Crc32, Generic, KeyBuilder,
+  Crc32, Generic, KeyBuilder, ValueBuilder,
 };
 
 use core::{
@@ -14,7 +15,12 @@ use core::{
 use std::sync::Arc;
 
 use super::types::{
-  generic_entry_ref::GenericEntryRef, generic_key::GenericKey, meta::Meta, query::Query,
+  generic_entry_ref::GenericEntryRef,
+  generic_key::GenericKey,
+  generic_value::{GenericValue, PhantomGenericValue},
+  meta::Meta,
+  pointer::Pointer,
+  query::Query,
 };
 
 /// The reader of the active log file.
@@ -208,13 +214,13 @@ where
 }
 
 struct Inner<K: ?Sized, V: ?Sized, S = Crc32> {
-  reader: GenericOrderWalReader<GenericKey<K>, V, S>,
+  reader: GenericOrderWalReader<GenericKey<K>, PhantomGenericValue<V>, S>,
   max_version: AtomicU64,
   min_version: AtomicU64,
 }
 
 impl<K: ?Sized, V: ?Sized, S> core::ops::Deref for Inner<K, V, S> {
-  type Target = GenericOrderWalReader<GenericKey<K>, V, S>;
+  type Target = GenericOrderWalReader<GenericKey<K>, PhantomGenericValue<V>, S>;
 
   #[inline]
   fn deref(&self) -> &Self::Target {
@@ -225,7 +231,7 @@ impl<K: ?Sized, V: ?Sized, S> core::ops::Deref for Inner<K, V, S> {
 /// The active log file.
 pub struct ActiveLogFile<K: ?Sized, V: ?Sized, S = Crc32> {
   inner: Arc<Inner<K, V, S>>,
-  writer: GenericOrderWal<GenericKey<K>, V, S>,
+  writer: GenericOrderWal<GenericKey<K>, PhantomGenericValue<V>, S>,
   max_key_size: u32,
   max_value_size: u32,
 }
@@ -246,11 +252,31 @@ where
   S: BuildChecksumer,
 {
   /// Inserts the key-value pair into the active log file.
+  #[inline]
   pub fn insert(
     &mut self,
     meta: Meta,
     key: Generic<'_, K>,
-    value: Generic<'_, V>,
+    value: Either<Generic<'_, V>, Pointer>,
+  ) -> Result<(), Among<K::Error, V::Error, ActiveLogError>> {
+    self.insert_in(meta, key, Some(value))
+  }
+
+  /// Removes the key from the active log file, fake delete operation (append with a tombstone entry).
+  #[inline]
+  pub fn remove(
+    &mut self,
+    meta: Meta,
+    key: Generic<'_, K>,
+  ) -> Result<(), Among<K::Error, V::Error, ActiveLogError>> {
+    self.insert_in(meta, key, None)
+  }
+
+  fn insert_in(
+    &mut self,
+    meta: Meta,
+    key: Generic<'_, K>,
+    value: Option<Either<Generic<'_, V>, Pointer>>,
   ) -> Result<(), Among<K::Error, V::Error, ActiveLogError>> {
     let klen = mem::size_of::<Meta>() + key.encoded_len();
     if klen > self.max_key_size as usize {
@@ -260,6 +286,7 @@ where
       }));
     }
 
+    let value = GenericValue::new(value);
     let vlen = value.encoded_len();
     if vlen > self.max_value_size as usize {
       return Err(Among::Right(ActiveLogError::ValueTooLarge {
@@ -278,6 +305,15 @@ where
       Ok(())
     });
 
-    unsafe { self.writer.insert_with_key_builder::<K::Error>(kb, value) }
+    let vb = ValueBuilder::once(vlen as u32, |buf| {
+      buf.set_len(vlen);
+      value.encode(buf).map(|_| ())
+    });
+
+    unsafe {
+      self
+        .writer
+        .insert_with_builders::<K::Error, V::Error>(kb, vb)
+    }
   }
 }

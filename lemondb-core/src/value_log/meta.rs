@@ -46,9 +46,6 @@ impl Meta {
   pub const SIZE: usize = core::mem::size_of::<Self>();
   /// The size of the version.
   pub const VERSION_SIZE: usize = core::mem::size_of::<u64>();
-  /// The size of the expiration.
-  #[cfg(feature = "ttl")]
-  pub const EXPIRES_AT_SIZE: usize = core::mem::size_of::<u64>();
 
   #[inline]
   fn required_fields<'a, 'b: 'a>(
@@ -61,18 +58,8 @@ impl Meta {
     s
   }
 
-  /// Decodes a version from the given buffer.
-  ///
-  /// ## Panics
-  /// - If the buffer is less than `Meta::VERSION_SIZE`.
-  #[inline]
-  pub fn decode_version(buf: &[u8]) -> u64 {
-    u64::from_le_bytes(<[u8; Self::VERSION_SIZE]>::try_from(&buf[..Self::VERSION_SIZE]).unwrap())
-      & Self::VERSION_MASK
-  }
-
   /// Encodes self into the given buffer.
-  /// 
+  ///
   /// ## Panics
   /// - If the buffer is less than `Meta::SIZE`.
   #[inline]
@@ -105,8 +92,6 @@ impl Meta {
 }
 
 impl Meta {
-  /// The maximum version.
-  pub const MAX_VERSION: u64 = (1 << 63) - 1;
   pub(crate) const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
   pub(crate) const TOMBSTONE_FLAG: u64 = 1 << 63; // 64th bit for tombstone mark
 
@@ -122,30 +107,11 @@ impl Meta {
     }
   }
 
-  /// Create a new metadata with the given version and toggle the tombstone flag.
-  #[inline]
-  pub const fn tombstone(mut version: u64, #[cfg(feature = "ttl")] expire_at: u64) -> Self {
-    assert!(version < (1 << 63), "version is too large");
-
-    version |= Self::TOMBSTONE_FLAG;
-    Self {
-      meta: version,
-      #[cfg(feature = "ttl")]
-      expire_at,
-    }
-  }
-
   /// Set the tombstone flag.
   #[inline]
   pub fn with_tombstone(mut self) -> Self {
     self.meta |= Self::TOMBSTONE_FLAG;
     self
-  }
-
-  /// Set the tombstone flag.
-  #[inline]
-  pub fn set_tombstone(&mut self) {
-    self.meta |= Self::TOMBSTONE_FLAG;
   }
 
   /// Returns `true` if the value of the entry is a tombstone.
@@ -158,19 +124,6 @@ impl Meta {
   #[inline]
   pub const fn version(&self) -> u64 {
     self.meta & Self::VERSION_MASK
-  }
-
-  /// Returns the timestamp of the expiration time.
-  #[cfg(feature = "ttl")]
-  #[inline]
-  pub const fn expire_at(&self) -> u64 {
-    self.expire_at
-  }
-
-  /// Returns the tombstone marker bit and version bits as a `u64`.
-  #[inline]
-  pub const fn raw(&self) -> u64 {
-    self.meta
   }
 }
 

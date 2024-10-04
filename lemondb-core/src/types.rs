@@ -4,6 +4,9 @@ pub mod meta;
 /// The entry in the database.
 pub mod entry;
 
+/// The file ID in the database.
+pub mod fid;
+
 /// The generic entry in the database.
 pub mod generic_entry;
 

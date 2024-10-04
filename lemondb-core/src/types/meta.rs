@@ -72,17 +72,6 @@ impl Meta {
       & Self::VERSION_MASK
   }
 
-  /// Encodes self into the given buffer.
-  /// 
-  /// ## Panics
-  /// - If the buffer is less than `Meta::SIZE`.
-  #[inline]
-  pub(crate) fn encode(&self, buf: &mut [u8]) {
-    buf[..Self::VERSION_SIZE].copy_from_slice(&self.meta.to_le_bytes());
-    #[cfg(feature = "ttl")]
-    buf[Self::VERSION_SIZE..].copy_from_slice(&self.expire_at.to_le_bytes());
-  }
-
   /// Decodes a metadata from the given buffer.
   ///
   /// ## Panics

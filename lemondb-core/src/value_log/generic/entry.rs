@@ -1,6 +1,9 @@
 use core::mem;
 
-use super::{merge_lengths, split_lengths, VMeta};
+use super::{
+  super::{merge_lengths, split_lengths},
+  VMeta,
+};
 
 use dbutils::traits::{Type, TypeRef};
 use skl::either::Either;
@@ -74,7 +77,7 @@ where
       Some(v) => {
         let value_len = v.encoded_len();
         VMeta::SIZE + mem::size_of::<u64>() + key_len + value_len
-      },
+      }
       None => VMeta::SIZE + mem::size_of::<u32>() + key_len,
     }
   }
@@ -82,22 +85,30 @@ where
   fn encode(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
     const LEN_SIZE: usize = mem::size_of::<u64>();
     const HALF_LEN_SIZE: usize = LEN_SIZE / 2;
-    
+
     let mut cursor = 0;
     self.meta.encode(&mut buf[..VMeta::SIZE]);
     cursor += VMeta::SIZE;
 
     let size = match self.value {
       Some(v) => {
-        let key_len = self.key.encode(&mut buf[cursor + LEN_SIZE..]).map_err(Either::Left)?;
-        let value_len = v.encode(&mut buf[cursor + LEN_SIZE + key_len..]).map_err(Either::Right)?;
+        let key_len = self
+          .key
+          .encode(&mut buf[cursor + LEN_SIZE..])
+          .map_err(Either::Left)?;
+        let value_len = v
+          .encode(&mut buf[cursor + LEN_SIZE + key_len..])
+          .map_err(Either::Right)?;
         let kvlen = merge_lengths(key_len as u32, value_len as u32);
         buf[cursor..cursor + LEN_SIZE].copy_from_slice(&kvlen.to_le_bytes());
         cursor += LEN_SIZE + key_len + value_len;
         cursor
-      },
+      }
       None => {
-        let key_len = self.key.encode(&mut buf[cursor + HALF_LEN_SIZE..]).map_err(Either::Left)?;
+        let key_len = self
+          .key
+          .encode(&mut buf[cursor + HALF_LEN_SIZE..])
+          .map_err(Either::Left)?;
         buf[cursor..cursor + HALF_LEN_SIZE].copy_from_slice(&key_len.to_le_bytes());
         cursor += HALF_LEN_SIZE + key_len;
         cursor
@@ -151,29 +162,35 @@ where
       ]);
       cursor += HALF_LEN_SIZE;
       let key = <K::Ref<'_> as TypeRef<'_>>::from_slice(&src[cursor..cursor + key_len as usize]);
-      Self { meta, key, value: None }
+      Self {
+        meta,
+        key,
+        value: None,
+      }
     } else {
-      let (key_len, value_len) = split_lengths(u64::from_le_bytes(
-        [
-          src[cursor],
-          src[cursor + 1],
-          src[cursor + 2],
-          src[cursor + 3],
-          src[cursor + 4],
-          src[cursor + 5],
-          src[cursor + 6],
-          src[cursor + 7],
-        ]
-      ));
+      let (key_len, value_len) = split_lengths(u64::from_le_bytes([
+        src[cursor],
+        src[cursor + 1],
+        src[cursor + 2],
+        src[cursor + 3],
+        src[cursor + 4],
+        src[cursor + 5],
+        src[cursor + 6],
+        src[cursor + 7],
+      ]));
       let key_len = key_len as usize;
       let value_len = value_len as usize;
       cursor += LEN_SIZE;
-  
+
       let key = <K::Ref<'_> as TypeRef<'_>>::from_slice(&src[cursor..cursor + key_len]);
       cursor += key_len;
       let value = <V::Ref<'_> as TypeRef<'_>>::from_slice(&src[cursor..cursor + value_len]);
-  
-      Self { meta, key, value: Some(value) }
-    }    
+
+      Self {
+        meta,
+        key,
+        value: Some(value),
+      }
+    }
   }
 }
