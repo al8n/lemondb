@@ -14,7 +14,8 @@ ttl = ["std", "time"]
 among.workspace = true
 dbutils.workspace = true
 orderwal.workspace = true
-skl.workspace = true
-zerocopy.workspace = true
 ref-cast.workspace = true
+skl.workspace = true
 time = { workspace = true, optional = true }
+valog.workspace = true
+zerocopy.workspace = true

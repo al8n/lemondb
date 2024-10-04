@@ -21,3 +21,6 @@ pub mod generic_entry_ref;
 
 /// A type used for lookups in the database.
 pub mod query;
+
+/// A pointer pointing to an entry with a large value in the value log.
+pub mod pointer;
