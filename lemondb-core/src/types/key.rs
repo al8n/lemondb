@@ -1,6 +1,6 @@
 use core::{cmp, marker::PhantomData};
 
-use dbutils::{traits::Type, StaticComparator};
+use dbutils::{buffer::VacantBuffer, traits::Type, StaticComparator};
 
 use super::{key_ref::KeyRef, meta::Meta};
 
@@ -62,5 +62,14 @@ impl<C> Type for Key<C> {
     buf[len + Meta::VERSION_SIZE..len + Meta::SIZE]
       .copy_from_slice(&self.meta.expire_at().to_le_bytes());
     Ok(len + Meta::SIZE)
+  }
+
+  #[inline]
+  fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
+    buf.put_slice_unchecked(&self.data);
+    buf.put_u64_le_unchecked(self.meta.raw());
+    #[cfg(feature = "ttl")]
+    buf.put_u64_le_unchecked(self.meta.expire_at());
+    Ok(self.data.len() + Meta::SIZE)
   }
 }

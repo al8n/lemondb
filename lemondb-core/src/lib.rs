@@ -14,9 +14,6 @@ extern crate std;
 /// An active log.
 pub mod active_log;
 
-/// An active log which supports generic types.
-pub mod generic_active_log;
-
 /// A frozen log.
 pub mod immutable_log;
 

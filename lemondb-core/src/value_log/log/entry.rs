@@ -31,6 +31,12 @@ impl Type for PhantomEntry {
   fn encode(&self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
     unreachable!()
   }
+
+  #[inline(never)]
+  #[cold]
+  fn encode_to_buffer(&self, _buf: &mut valog::VacantBuffer<'_>) -> Result<usize, Self::Error> {
+    unreachable!()
+  }
 }
 
 /// The generic entry in the value log.
@@ -103,6 +109,25 @@ impl<'a> Type for Entry<'a> {
     };
 
     Ok(size)
+  }
+
+  fn encode_to_buffer(&self, buf: &mut valog::VacantBuffer<'_>) -> Result<usize, Self::Error> {
+    let len = buf.len();
+    self.meta.encode_to_buffer(buf);
+
+    match self.value {
+      Some(v) => {
+        buf.put_u64_le_unchecked(merge_lengths(self.key.len() as u32, v.len() as u32));
+        buf.put_slice_unchecked(self.key);
+        buf.put_slice_unchecked(v);
+      }
+      None => {
+        buf.put_u32_le_unchecked(self.key.len() as u32);
+        buf.put_slice_unchecked(self.key);
+      }
+    }
+
+    Ok(buf.len() - len)
   }
 }
 

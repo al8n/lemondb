@@ -1,7 +1,10 @@
 use core::marker::PhantomData;
 
 use among::Among;
-use dbutils::traits::{Type, TypeRef};
+use dbutils::{
+  buffer::VacantBuffer,
+  traits::{Type, TypeRef},
+};
 
 use skl::either::Either;
 
@@ -30,6 +33,12 @@ impl Type for PhantomValue {
   #[inline(never)]
   #[cold]
   fn encode(&self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
+    unreachable!()
+  }
+
+  #[inline(never)]
+  #[cold]
+  fn encode_to_buffer(&self, _buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
     unreachable!()
   }
 }
@@ -96,6 +105,28 @@ impl<'a> Type for Value<'a> {
         buf[0] = 2;
         pointer
           .encode(&mut buf[1..])
+          .expect("not enough space to encode pointer");
+        Ok(1 + Pointer::ENCODED_LEN)
+      }
+    }
+  }
+
+  #[inline]
+  fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
+    match self.0 {
+      Among::Left(_) => {
+        buf.put_u8_unchecked(0);
+        Ok(1)
+      }
+      Among::Middle(value) => {
+        buf.put_u8_unchecked(1);
+        buf.put_slice_unchecked(value);
+        Ok(1 + value.len())
+      }
+      Among::Right(ref pointer) => {
+        buf.put_u8_unchecked(2);
+        pointer
+          .encode_to_buffer(buf)
           .expect("not enough space to encode pointer");
         Ok(1 + Pointer::ENCODED_LEN)
       }

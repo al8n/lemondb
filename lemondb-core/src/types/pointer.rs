@@ -1,5 +1,6 @@
 use core::mem;
 
+use dbutils::buffer::VacantBuffer;
 use valog::ValuePointer;
 
 use super::fid::Fid;
@@ -120,12 +121,38 @@ impl Pointer {
     let mut fid: u64 = self.id().into();
     if self.tombstone {
       fid |= Self::TOMBSTONE_FLAG;
+    } else {
+      // clear the tombstone flag
+      fid &= Self::FID_MASK;
     }
 
     buf[..ID_SIZE].copy_from_slice(&fid.to_le_bytes());
     buf[ID_SIZE..ID_SIZE + OFFSET_SIZE].copy_from_slice(&self.offset().to_le_bytes());
     buf[ID_SIZE + OFFSET_SIZE..ID_SIZE + OFFSET_SIZE + SIZE_SIZE]
       .copy_from_slice(&self.size().to_le_bytes());
+
+    Ok(())
+  }
+
+  /// Encodes the pointer into the given `buf`.
+  #[inline]
+  pub fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<(), InsufficientBuffer> {
+    let buf_len = buf.len();
+    if buf_len < Self::ENCODED_LEN {
+      return Err(InsufficientBuffer::new(Self::ENCODED_LEN, buf_len));
+    }
+
+    let mut fid: u64 = self.id().into();
+    if self.tombstone {
+      fid |= Self::TOMBSTONE_FLAG;
+    } else {
+      // clear the tombstone flag
+      fid &= Self::FID_MASK;
+    }
+
+    buf.put_u64_le_unchecked(fid);
+    buf.put_u32_le_unchecked(self.offset());
+    buf.put_u32_le_unchecked(self.size());
 
     Ok(())
   }

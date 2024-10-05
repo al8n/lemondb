@@ -1,3 +1,4 @@
+use dbutils::buffer::VacantBuffer;
 use zerocopy::{FromBytes, FromZeroes};
 
 /// The metadata for the value log.
@@ -67,6 +68,17 @@ impl Meta {
     buf[..Self::VERSION_SIZE].copy_from_slice(&self.meta.to_le_bytes());
     #[cfg(feature = "ttl")]
     buf[Self::VERSION_SIZE..].copy_from_slice(&self.expire_at.to_le_bytes());
+  }
+
+  /// Encodes self into the given buffer.
+  ///
+  /// ## Panics
+  /// - If the buffer is less than `Meta::SIZE`.
+  #[inline]
+  pub(crate) fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) {
+    buf.put_u64_le_unchecked(self.meta);
+    #[cfg(feature = "ttl")]
+    buf.put_u64_le_unchecked(self.expire_at);
   }
 
   /// Decodes a metadata from the given buffer.

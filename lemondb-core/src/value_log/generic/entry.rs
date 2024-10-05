@@ -5,7 +5,10 @@ use super::{
   VMeta,
 };
 
-use dbutils::traits::{Type, TypeRef};
+use dbutils::{
+  buffer::VacantBuffer,
+  traits::{Type, TypeRef},
+};
 use skl::either::Either;
 
 pub(super) struct PhantomGenericEntry<K: ?Sized, V: ?Sized> {
@@ -36,6 +39,15 @@ where
   #[inline(never)]
   #[cold]
   fn encode(&self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
+    unreachable!()
+  }
+
+  #[inline(never)]
+  #[cold]
+  fn encode_to_buffer(
+    &self,
+    _buf: &mut dbutils::buffer::VacantBuffer<'_>,
+  ) -> Result<usize, Self::Error> {
     unreachable!()
   }
 }
@@ -116,6 +128,37 @@ where
     };
 
     Ok(size)
+  }
+
+  fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
+    const LEN_SIZE: usize = mem::size_of::<u64>();
+    const HALF_LEN_SIZE: usize = LEN_SIZE / 2;
+
+    let start = buf.len();
+    let mut cursor = start;
+    self.meta.encode_to_buffer(buf);
+    cursor += VMeta::SIZE;
+
+    match self.value {
+      Some(v) => {
+        buf.put_u64_le_unchecked(0); // placeholder for the length
+        cursor += LEN_SIZE;
+        let key_len = self.key.encode_to_buffer(buf).map_err(Either::Left)?;
+        let value_len = v.encode_to_buffer(buf).map_err(Either::Right)?;
+        let kvlen = merge_lengths(key_len as u32, value_len as u32);
+        buf[cursor - LEN_SIZE..cursor].copy_from_slice(&kvlen.to_le_bytes());
+        cursor += key_len + value_len;
+        Ok(cursor)
+      }
+      None => {
+        buf.put_u32_le_unchecked(0); // placeholder for the length
+        cursor += HALF_LEN_SIZE;
+        let key_len = self.key.encode_to_buffer(buf).map_err(Either::Left)?;
+        buf[cursor - HALF_LEN_SIZE..cursor].copy_from_slice(&(key_len as u32).to_le_bytes());
+        cursor += key_len;
+        Ok(cursor - start)
+      }
+    }
   }
 }
 

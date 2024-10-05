@@ -1,6 +1,6 @@
 use core::cmp;
 
-use dbutils::traits::Type;
+use dbutils::{buffer::VacantBuffer, traits::Type};
 
 use super::{generic_key_ref::GenericKeyRef, meta::Meta};
 
@@ -74,8 +74,18 @@ where
   fn encode(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
     let len = K::encode(&self.data, buf)?;
     buf[len..len + Meta::VERSION_SIZE].copy_from_slice(&self.meta.raw().to_le_bytes());
+    #[cfg(feature = "ttl")]
     buf[len + Meta::VERSION_SIZE..len + Meta::SIZE]
       .copy_from_slice(&self.meta.expire_at().to_le_bytes());
     Ok(len + Meta::SIZE)
+  }
+
+  #[inline]
+  fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
+    let klen = self.data.encode_to_buffer(buf)?;
+    buf.put_u64_le_unchecked(self.meta.raw());
+    #[cfg(feature = "ttl")]
+    buf.put_u64_le_unchecked(self.meta.expire_at());
+    Ok(klen + Meta::SIZE)
   }
 }

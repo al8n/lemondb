@@ -14,7 +14,7 @@ use core::{
 };
 use std::sync::Arc;
 
-use super::types::{
+use crate::types::{
   generic_entry_ref::GenericEntryRef,
   generic_key::GenericKey,
   generic_value::{GenericValue, PhantomGenericValue},
