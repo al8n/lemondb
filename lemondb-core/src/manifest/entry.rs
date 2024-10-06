@@ -183,8 +183,8 @@ macro_rules! manifest_entry_flags_constructors {
     paste::paste! {
       const POSSIBLE_FLAGS: &[u8] = &[
         $(
-          ManifestEntryFlags::[< create_ $name $(_ $log)?>]().bits(),
-          ManifestEntryFlags::[< delete_ $name $(_ $log)?>]().bits(),
+          Self::[< create_ $name $(_ $log)?>]().bits(),
+          Self::[< delete_ $name $(_ $log)?>]().bits(),
         )*
       ];
     }
