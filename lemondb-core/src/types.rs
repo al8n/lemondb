@@ -39,3 +39,9 @@ pub mod generic_value;
 
 /// A value type, which can either be a value or a pointer.
 pub mod value;
+
+/// The table name in the database.
+pub mod table_name;
+
+/// The table ID in the database.
+pub mod table_id;

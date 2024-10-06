@@ -2,9 +2,10 @@
 name = "lemondb-core"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.81.0"
 
 [features]
-default = ["std"]
+default = ["std", "ttl"]
 alloc = []
 std = []
 
@@ -13,6 +14,7 @@ ttl = ["std", "time"]
 [dependencies]
 arbitrary-int = { version = "1.2", default-features = false }
 among.workspace = true
+aol.workspace = true
 derive_more.workspace = true
 dbutils.workspace = true
 dtlog.workspace = true
@@ -20,6 +22,9 @@ either.workspace = true
 orderwal.workspace = true
 ref-cast.workspace = true
 skl.workspace = true
+smol_str.workspace = true
 time = { workspace = true, optional = true }
+thiserror.workspace = true
 valog.workspace = true
+viewit.workspace = true
 zerocopy.workspace = true

@@ -14,6 +14,9 @@ extern crate std;
 /// An active log.
 pub mod active_log;
 
+/// Common error types.
+pub mod error;
+
 /// A frozen log.
 pub mod immutable_log;
 
@@ -25,3 +28,6 @@ pub mod utils;
 
 /// The value log used by the database.
 pub mod value_log;
+
+/// The manifest log used by the database.
+pub mod manifest;

@@ -3,61 +3,9 @@ use core::mem;
 use dbutils::buffer::VacantBuffer;
 use valog::ValuePointer;
 
+use crate::error::{IncompleteBuffer, InsufficientBuffer};
+
 use super::fid::Fid;
-
-/// Returned when the encoded buffer is too small to hold the bytes format of the [`Pointer`].
-#[derive(Debug)]
-pub struct InsufficientBuffer {
-  required: usize,
-  actual: usize,
-}
-
-impl InsufficientBuffer {
-  /// Creates a new instance of the error.
-  #[inline]
-  const fn new(required: usize, actual: usize) -> Self {
-    Self { required, actual }
-  }
-}
-
-impl core::fmt::Display for InsufficientBuffer {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    write!(
-      f,
-      "Insufficient buffer capacity: required {} bytes, but only {} bytes were provided",
-      self.required, self.actual
-    )
-  }
-}
-
-impl core::error::Error for InsufficientBuffer {}
-
-/// Returned when the buffer does not contains engouth bytes for decoding.
-#[derive(Debug)]
-pub struct IncompleteBuffer {
-  required: usize,
-  actual: usize,
-}
-
-impl IncompleteBuffer {
-  /// Creates a new instance of the error.
-  #[inline]
-  const fn new(required: usize, actual: usize) -> Self {
-    Self { required, actual }
-  }
-}
-
-impl core::fmt::Display for IncompleteBuffer {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    write!(
-      f,
-      "Incomplete buffer data: expected {} bytes for decoding, but only {} bytes were available",
-      self.required, self.actual
-    )
-  }
-}
-
-impl core::error::Error for IncompleteBuffer {}
 
 /// A pointer which points to an entry with a large value in value log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -115,7 +63,10 @@ impl Pointer {
 
     let buf_len = buf.len();
     if buf_len < Self::ENCODED_LEN {
-      return Err(InsufficientBuffer::new(Self::ENCODED_LEN, buf_len));
+      return Err(InsufficientBuffer::with_information(
+        Self::ENCODED_LEN,
+        buf_len,
+      ));
     }
 
     let mut fid: u64 = self.id().into();
@@ -139,7 +90,10 @@ impl Pointer {
   pub fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<(), InsufficientBuffer> {
     let buf_len = buf.len();
     if buf_len < Self::ENCODED_LEN {
-      return Err(InsufficientBuffer::new(Self::ENCODED_LEN, buf_len));
+      return Err(InsufficientBuffer::with_information(
+        Self::ENCODED_LEN,
+        buf_len,
+      ));
     }
 
     let mut fid: u64 = self.id().into();
@@ -162,7 +116,10 @@ impl Pointer {
   pub fn decode(buf: &[u8]) -> Result<Self, IncompleteBuffer> {
     let buf_len = buf.len();
     if buf_len < Self::ENCODED_LEN {
-      return Err(IncompleteBuffer::new(Self::ENCODED_LEN, buf_len));
+      return Err(IncompleteBuffer::with_information(
+        Self::ENCODED_LEN,
+        buf_len,
+      ));
     }
 
     let mut id = u64::from_le_bytes([
