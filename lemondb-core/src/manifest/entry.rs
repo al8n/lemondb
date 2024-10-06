@@ -153,7 +153,7 @@ impl aol::Record for ManifestRecord {
 /// - The fourth bit of the manifest entry indicating it is a frozen log event or not.
 ///   - `1`: Frozen log event.
 /// - The fifth bit of the manifest entry indicating it is a bloomfilter or not.
-///   - `1`: Bloomfilter.
+///   - `1`: Bloomfilter log event.
 /// - The sixth bit of the manifest entry indicating it is a value log event or not.
 ///   - `1`: Value log event.
 /// - The seventh and eighth bits are reserved for future use.
@@ -163,16 +163,16 @@ pub struct ManifestEntryFlags(EntryFlags);
 impl core::fmt::Display for ManifestEntryFlags {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match () {
-      () if self.is_creation() && self.is_active_log() => write!(f, "create_active_log"),
-      () if self.is_creation() && self.is_frozen_log() => write!(f, "create_frozen_log"),
-      () if self.is_creation() && self.is_bloomfilter() => write!(f, "create_bloomfilter"),
-      () if self.is_creation() && self.is_value_log() => write!(f, "create_value_log"),
-      () if self.is_creation() && self.is_table() => write!(f, "create_table"),
-      () if self.is_deletion() && self.is_active_log() => write!(f, "delete_active_log"),
-      () if self.is_deletion() && self.is_frozen_log() => write!(f, "delete_frozen_log"),
-      () if self.is_deletion() && self.is_bloomfilter() => write!(f, "delete_bloomfilter"),
-      () if self.is_deletion() && self.is_value_log() => write!(f, "delete_value_log"),
-      () if self.is_deletion() && self.is_table() => write!(f, "delete_table"),
+      _ if self.is_creation() && self.is_active_log() => write!(f, "create_active_log"),
+      _ if self.is_creation() && self.is_frozen_log() => write!(f, "create_frozen_log"),
+      _ if self.is_creation() && self.is_bloomfilter() => write!(f, "create_bloomfilter"),
+      _ if self.is_creation() && self.is_value_log() => write!(f, "create_value_log"),
+      _ if self.is_creation() && self.is_table() => write!(f, "create_table"),
+      _ if self.is_deletion() && self.is_active_log() => write!(f, "delete_active_log"),
+      _ if self.is_deletion() && self.is_frozen_log() => write!(f, "delete_frozen_log"),
+      _ if self.is_deletion() && self.is_bloomfilter() => write!(f, "delete_bloomfilter"),
+      _ if self.is_deletion() && self.is_value_log() => write!(f, "delete_value_log"),
+      _ if self.is_deletion() && self.is_table() => write!(f, "delete_table"),
       _ => unreachable!(),
     }
   }
@@ -180,6 +180,15 @@ impl core::fmt::Display for ManifestEntryFlags {
 
 macro_rules! manifest_entry_flags_constructors {
   ($($idx:literal: $name:ident $($log:ident)?), +$(,)?) => {
+    paste::paste! {
+      const POSSIBLE_FLAGS: &[u8] = &[
+        $(
+          ManifestEntryFlags::[< create_ $name $(_ $log)?>]().bits(),
+          ManifestEntryFlags::[< delete_ $name $(_ $log)?>]().bits(),
+        )*
+      ];
+    }
+
     $(
       paste::paste! {
         #[doc = "Returns a flag indicating it is a creation event for " $name $(" " $log)? "."]
@@ -205,22 +214,8 @@ macro_rules! manifest_entry_flags_constructors {
   };
 }
 
-macro_rules! possible_manifest_entry_flags {
-  ($($name:ident $($log:ident)?), +$(,)?) => {
-    paste::paste! {
-      {
-        &[
-          $(
-            Self::[< create_ $name $(_ $log)?>]().bits(),
-            Self::[< delete_ $name $(_ $log)?>]().bits(),
-          )*
-        ]
-      }
-    }
-  };
-}
-
 impl ManifestEntryFlags {
+  // Order is important here, as we are using binary search to check if the flag is possible.
   manifest_entry_flags_constructors!(
     1: table,
     2: active log,
@@ -228,6 +223,11 @@ impl ManifestEntryFlags {
     4: bloomfilter,
     5: value log
   );
+
+  #[inline]
+  pub(super) fn is_possible_flag(bits: u8) -> bool {
+    Self::POSSIBLE_FLAGS.binary_search(&bits).is_ok()
+  }
 
   /// Returns `true` if the flag is a creation event.
   #[inline]
@@ -245,19 +245,6 @@ impl ManifestEntryFlags {
   #[inline]
   pub const fn bits(&self) -> u8 {
     self.0.bits()
-  }
-
-  const POSSIBLE_FLAGS: &[u8] = possible_manifest_entry_flags!(
-    table,
-    active log,
-    frozen log,
-    bloomfilter,
-    value log
-  );
-
-  #[inline]
-  pub(super) fn is_possible_flag(bits: u8) -> bool {
-    Self::POSSIBLE_FLAGS.contains(&bits)
   }
 }
 

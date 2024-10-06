@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use among::Among;
+use among::{Among, AmongErrorExt};
 use aol::{AppendLog, Builder, Entry};
 
 use super::*;
@@ -26,20 +26,26 @@ impl DiskManifest {
       .with_magic_version(version)
       .build(&path)
       .map(|log| Self { log })
-      .map_err(|e| e.map_right(Into::into))
+      .map_err_right(Into::into)
   }
 
   #[inline]
-  pub(super) fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>> {
-    self.log.append(ent).map_err(|e| e.map_right(Into::into))
+  pub(super) fn append(
+    &mut self,
+    ent: Entry<ManifestRecord>,
+  ) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>> {
+    self.log.append(ent).map_err_right(Into::into)
   }
 
   #[inline]
-  pub(super) fn append_batch<B>(&mut self, entries: B) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>>
+  pub(super) fn append_batch<B>(
+    &mut self,
+    entries: B,
+  ) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>>
   where
     B: Batch<ManifestEntry, ManifestRecord>,
   {
-    self.log.append_batch(entries).map_err(|e| e.map_right(Into::into))
+    self.log.append_batch(entries).map_err_right(Into::into)
   }
 
   #[inline]

@@ -196,22 +196,28 @@ impl Manifest {
   }
 
   fn insert_in(&mut self, entry: aol::Entry<ManifestRecord>) -> Result<(), ManifestError> {
-    let flag = entry.flag();
+    let flag = ManifestEntryFlags::from(entry.flag());
     let record = entry.into_data();
 
     match record {
       ManifestRecord::Log { fid, tid } => {
         if let Some(table) = self.tables.get_mut(&Reverse(tid)) {
           if flag.is_creation() {
-            if flag.custom_flag().bit1() {
-              table.vlogs.insert(fid);
-            } else {
-              table.active_logs.insert(fid);
-            }
-          } else if flag.custom_flag().bit1() {
-            table.vlogs.remove(&fid);
+            match () {
+              _ if flag.is_active_log() => table.active_logs.insert(fid),
+              _ if flag.is_frozen_log() => table.frozen_logs.insert(fid),
+              _ if flag.is_bloomfilter() => table.bloomfilters.insert(fid),
+              _ if flag.is_value_log() => table.vlogs.insert(fid),
+              _ => unreachable!(),
+            };
           } else {
-            table.active_logs.remove(&fid);
+            match () {
+              _ if flag.is_active_log() => table.active_logs.remove(&fid),
+              _ if flag.is_frozen_log() => table.frozen_logs.remove(&fid),
+              _ if flag.is_bloomfilter() => table.bloomfilters.remove(&fid),
+              _ if flag.is_value_log() => table.vlogs.remove(&fid),
+              _ => unreachable!(),
+            };
           }
 
           Ok(())
@@ -280,7 +286,9 @@ impl ManifestFile {
 
   /// Opens a memory manifest file.
   #[cfg(not(feature = "std"))]
-  pub fn open(opts: ManifestOptions) -> Result<Self, ManifestFileError> {
+  pub fn open(
+    opts: ManifestOptions,
+  ) -> Result<Self, Among<ManifestRecordError, ManifestError, ManifestFileError>> {
     Ok(Self {
       kind: ManifestFileKind::Memory(memory::MemoryManifest::new(opts)),
     })
@@ -288,23 +296,29 @@ impl ManifestFile {
 
   /// Appends an entry to the manifest file.
   #[inline]
-  pub fn append(&mut self, ent: ManifestEntry) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>> {
+  pub fn append(
+    &mut self,
+    ent: ManifestEntry,
+  ) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>> {
     let ent = ent.into();
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append(ent).map_err(Into::into),
-      ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
+      ManifestFileKind::Disk(d) => d.append(ent),
     }
   }
 
   /// Appends a batch of entries to the manifest file.
   #[inline]
-  pub fn append_batch<B>(&mut self, entries: B) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>>
+  pub fn append_batch<B>(
+    &mut self,
+    entries: B,
+  ) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>>
   where
     B: Batch<ManifestEntry, ManifestRecord>,
   {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append_batch(entries).map_err(Into::into),
-      ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),
+      ManifestFileKind::Disk(d) => d.append_batch(entries),
     }
   }
 

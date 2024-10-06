@@ -15,12 +15,18 @@ impl MemoryManifest {
   }
 
   #[inline]
-  pub(super) fn append(&mut self, entry: aol::Entry<ManifestRecord>) -> Result<(), Either<ManifestRecordError, ManifestError>> {
+  pub(super) fn append(
+    &mut self,
+    entry: aol::Entry<ManifestRecord>,
+  ) -> Result<(), Either<ManifestRecordError, ManifestError>> {
     self.manifest.insert(entry)
   }
 
   #[inline]
-  pub(super) fn append_batch<B>(&mut self, entries: B) -> Result<(), Either<ManifestRecordError, ManifestError>>
+  pub(super) fn append_batch<B>(
+    &mut self,
+    entries: B,
+  ) -> Result<(), Either<ManifestRecordError, ManifestError>>
   where
     B: Batch<ManifestEntry, ManifestRecord>,
   {
