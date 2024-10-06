@@ -53,13 +53,13 @@ impl<'a> Entry<'a> {
   }
 }
 
-impl<'a> core::fmt::Debug for Entry<'a> {
+impl core::fmt::Debug for Entry<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Entry").finish()
   }
 }
 
-impl<'a> Type for Entry<'a> {
+impl Type for Entry<'_> {
   type Ref<'b> = EntryRef<'b>;
 
   type Error = ();
@@ -138,7 +138,7 @@ pub struct EntryRef<'a> {
   value: Option<&'a [u8]>,
 }
 
-impl<'a> core::fmt::Debug for EntryRef<'a> {
+impl core::fmt::Debug for EntryRef<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("EntryRef")
       .field("meta", &self.meta)

@@ -46,7 +46,7 @@ impl Type for PhantomValue {
 /// The  value store in the database.
 pub struct Value<'a>(Among<(), &'a [u8], Pointer>);
 
-impl<'a> core::fmt::Debug for Value<'a> {
+impl core::fmt::Debug for Value<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self.0 {
       Among::Left(_) => f.debug_tuple("Value").field(&()).finish(),
@@ -74,7 +74,7 @@ impl<'a> Value<'a> {
   }
 }
 
-impl<'a> Type for Value<'a> {
+impl Type for Value<'_> {
   type Ref<'b> = ValueRef<'b>;
 
   type Error = ();
@@ -139,7 +139,7 @@ pub struct ValueRef<'a> {
   value: Among<(), &'a [u8], Pointer>,
 }
 
-impl<'a> core::fmt::Debug for ValueRef<'a> {
+impl core::fmt::Debug for ValueRef<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match &self.value {
       Among::Left(_) => f.debug_tuple("Value").field(&()).finish(),

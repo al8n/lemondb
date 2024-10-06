@@ -157,7 +157,7 @@ impl aol::Record for ManifestRecord {
 /// - The sixth bit of the manifest entry indicating it is a value log event or not.
 ///   - `1`: Value log event.
 /// - The seventh and eighth bits are reserved for future use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, From, Into, PartialEq, Eq, Hash)]
 pub struct ManifestEntryFlags(EntryFlags);
 
 impl core::fmt::Display for ManifestEntryFlags {
@@ -205,6 +205,21 @@ macro_rules! manifest_entry_flags_constructors {
   };
 }
 
+macro_rules! possible_manifest_entry_flags {
+  ($($name:ident $($log:ident)?), +$(,)?) => {
+    paste::paste! {
+      {
+        &[
+          $(
+            Self::[< create_ $name $(_ $log)?>]().bits(),
+            Self::[< delete_ $name $(_ $log)?>]().bits(),
+          )*
+        ]
+      }
+    }
+  };
+}
+
 impl ManifestEntryFlags {
   manifest_entry_flags_constructors!(
     1: table,
@@ -224,6 +239,25 @@ impl ManifestEntryFlags {
   #[inline]
   pub const fn is_deletion(&self) -> bool {
     self.0.is_deletion()
+  }
+
+  /// Returns the flag in the form of a `u8`.
+  #[inline]
+  pub const fn bits(&self) -> u8 {
+    self.0.bits()
+  }
+
+  const POSSIBLE_FLAGS: &[u8] = possible_manifest_entry_flags!(
+    table,
+    active log,
+    frozen log,
+    bloomfilter,
+    value log
+  );
+
+  #[inline]
+  pub(super) fn is_possible_flag(bits: u8) -> bool {
+    Self::POSSIBLE_FLAGS.contains(&bits)
   }
 }
 

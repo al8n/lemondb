@@ -27,7 +27,7 @@ paste = "1"
 zerocopy = { version = "0.7", features = ["derive"] }
 
 # write ahead logs
-aol = { version = "0.2", path = "../aol", default-features = false, features = ["std"] }
+aol = { version = "0.3", path = "../aol", default-features = false, features = ["std"] }
 dtlog = { version = "0.1", default-features = false, features = ["memmap"] }
 orderwal = { version = "0.4", path = "../orderwal", default-features = false, features = ["std"] }
 skl = { version = "0.16", path = "../skl-rs", default-features = false, features = ["memmap"] }

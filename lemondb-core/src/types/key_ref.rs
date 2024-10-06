@@ -47,16 +47,16 @@ impl<'a, C> KeyRef<'a, C> {
   }
 }
 
-impl<'a, C> PartialEq for KeyRef<'a, C> {
+impl<C> PartialEq for KeyRef<'_, C> {
   #[inline]
   fn eq(&self, other: &Self) -> bool {
     self.data.eq(other.data) && self.meta.version() == other.meta.version()
   }
 }
 
-impl<'a, C> Eq for KeyRef<'a, C> {}
+impl<C> Eq for KeyRef<'_, C> {}
 
-impl<'a, C> PartialOrd for KeyRef<'a, C>
+impl<C> PartialOrd for KeyRef<'_, C>
 where
   C: StaticComparator,
 {
@@ -66,7 +66,7 @@ where
   }
 }
 
-impl<'a, C> Ord for KeyRef<'a, C>
+impl<C> Ord for KeyRef<'_, C>
 where
   C: StaticComparator,
 {
@@ -77,7 +77,7 @@ where
   }
 }
 
-impl<'a, C> core::fmt::Debug for KeyRef<'a, C> {
+impl<C> core::fmt::Debug for KeyRef<'_, C> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct(core::any::type_name::<Self>())
       .field("meta", &self.meta)
@@ -102,7 +102,7 @@ impl<'a, C> TypeRef<'a> for KeyRef<'a, C> {
   }
 }
 
-impl<'a, 'b, C: StaticComparator> dbutils::traits::KeyRef<'b, Key<C>> for KeyRef<'a, C> {
+impl<C: StaticComparator> dbutils::traits::KeyRef<'_, Key<C>> for KeyRef<'_, C> {
   #[inline]
   fn compare<Q>(&self, a: &Q) -> cmp::Ordering
   where
@@ -125,13 +125,13 @@ impl<'a, 'b, C: StaticComparator> dbutils::traits::KeyRef<'b, Key<C>> for KeyRef
   }
 }
 
-impl<'a, C> Equivalent<Key<C>> for KeyRef<'a, C> {
+impl<C> Equivalent<Key<C>> for KeyRef<'_, C> {
   fn equivalent(&self, key: &Key<C>) -> bool {
     self.meta.version() == key.meta.version() && self.data.eq(&key.data)
   }
 }
 
-impl<'a, C> Comparable<Key<C>> for KeyRef<'a, C>
+impl<C> Comparable<Key<C>> for KeyRef<'_, C>
 where
   C: StaticComparator,
 {
@@ -157,7 +157,7 @@ where
   }
 }
 
-impl<'a, C> Equivalent<KeyRef<'_, C>> for Query<'a, [u8], Key<C>>
+impl<C> Equivalent<KeyRef<'_, C>> for Query<'_, [u8], Key<C>>
 where
   C: StaticComparator,
 {
@@ -167,7 +167,7 @@ where
   }
 }
 
-impl<'a, C> Comparable<KeyRef<'_, C>> for Query<'a, [u8], Key<C>>
+impl<C> Comparable<KeyRef<'_, C>> for Query<'_, [u8], Key<C>>
 where
   C: StaticComparator,
 {

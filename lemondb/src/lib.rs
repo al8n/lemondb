@@ -39,7 +39,10 @@ trait Mu {
 
 #[cfg(feature = "parking_lot")]
 impl<T: ?Sized> Mu for parking_lot::Mutex<T> {
-  type Guard<'a> = parking_lot::MutexGuard<'a, T> where Self: 'a;
+  type Guard<'a>
+    = parking_lot::MutexGuard<'a, T>
+  where
+    Self: 'a;
 
   fn lock_me(&self) -> Self::Guard<'_> {
     self.lock()
@@ -48,7 +51,10 @@ impl<T: ?Sized> Mu for parking_lot::Mutex<T> {
 
 #[cfg(not(feature = "parking_lot"))]
 impl<T: ?Sized> Mu for std::sync::Mutex<T> {
-  type Guard<'a> = std::sync::MutexGuard<'a, T> where Self: 'a;
+  type Guard<'a>
+    = std::sync::MutexGuard<'a, T>
+  where
+    Self: 'a;
 
   fn lock_me(&self) -> Self::Guard<'_> {
     self.lock().unwrap()

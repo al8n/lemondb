@@ -47,7 +47,7 @@ impl<V: ?Sized + Type> Type for PhantomGenericValue<V> {
 /// The generic value store in the database.
 pub struct GenericValue<'a, V: ?Sized>(Among<(), Generic<'a, V>, Pointer>);
 
-impl<'a, V> core::fmt::Debug for GenericValue<'a, V>
+impl<V> core::fmt::Debug for GenericValue<'_, V>
 where
   V: ?Sized + Type + core::fmt::Debug,
 {
@@ -81,7 +81,7 @@ impl<'a, V: ?Sized> GenericValue<'a, V> {
   }
 }
 
-impl<'a, V> Type for GenericValue<'a, V>
+impl<V> Type for GenericValue<'_, V>
 where
   V: ?Sized + Type,
 {

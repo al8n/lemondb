@@ -1,6 +1,7 @@
-use std::{fs::OpenOptions, path::Path};
+use std::path::Path;
 
-use aol::{AppendLog, Entry, Options};
+use among::Among;
+use aol::{AppendLog, Builder, Entry};
 
 use super::*;
 
@@ -16,30 +17,29 @@ impl DiskManifest {
     path: P,
     rewrite_threshold: usize,
     version: u16,
-  ) -> Result<Self, ManifestFileError> {
+  ) -> Result<Self, Among<ManifestRecordError, ManifestError, ManifestFileError>> {
     let path = path.as_ref().join(MANIFEST_FILENAME);
-    let mut open_options = OpenOptions::new();
-    open_options.read(true).create(true).append(true);
-    let log = AppendLog::open(
-      &path,
-      ManifestOptions::new().with_rewrite_threshold(rewrite_threshold),
-      Options::new().with_magic_version(version),
-    )?;
-
-    Ok(Self { log })
+    Builder::new(ManifestOptions::new().with_rewrite_threshold(rewrite_threshold))
+      .with_create(true)
+      .with_append(true)
+      .with_read(true)
+      .with_magic_version(version)
+      .build(&path)
+      .map(|log| Self { log })
+      .map_err(|e| e.map_right(Into::into))
   }
 
   #[inline]
-  pub(super) fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), ManifestFileError> {
-    self.log.append(ent).map_err(Into::into)
+  pub(super) fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>> {
+    self.log.append(ent).map_err(|e| e.map_right(Into::into))
   }
 
   #[inline]
-  pub(super) fn append_batch<B>(&mut self, entries: B) -> Result<(), ManifestFileError>
+  pub(super) fn append_batch<B>(&mut self, entries: B) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>>
   where
     B: Batch<ManifestEntry, ManifestRecord>,
   {
-    self.log.append_batch(entries).map_err(Into::into)
+    self.log.append_batch(entries).map_err(|e| e.map_right(Into::into))
   }
 
   #[inline]

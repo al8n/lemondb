@@ -21,7 +21,7 @@ impl<'a, Q: ?Sized, K: ?Sized> Query<'a, Q, K> {
   }
 }
 
-impl<'a, Q, K> PartialEq for Query<'a, Q, K>
+impl<Q, K> PartialEq for Query<'_, Q, K>
 where
   Q: ?Sized + PartialEq,
   K: ?Sized,
@@ -32,14 +32,14 @@ where
   }
 }
 
-impl<'a, Q, K> Eq for Query<'a, Q, K>
+impl<Q, K> Eq for Query<'_, Q, K>
 where
   Q: ?Sized + Eq,
   K: ?Sized,
 {
 }
 
-impl<'a, Q, K> PartialOrd for Query<'a, Q, K>
+impl<Q, K> PartialOrd for Query<'_, Q, K>
 where
   K: ?Sized,
   Q: ?Sized + Ord,
@@ -50,7 +50,7 @@ where
   }
 }
 
-impl<'a, Q, K> Ord for Query<'a, Q, K>
+impl<Q, K> Ord for Query<'_, Q, K>
 where
   K: ?Sized,
   Q: ?Sized + Ord,

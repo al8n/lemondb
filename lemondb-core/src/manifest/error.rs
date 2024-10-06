@@ -11,7 +11,7 @@ use crate::{
   },
 };
 
-use super::UnknownManifestRecordType;
+use super::{ManifestEntryFlags, UnknownManifestRecordType};
 
 /// An error that occurs when manipulating the manifest file.
 #[derive(Debug, From, Into, Deref, AsRef)]
@@ -110,4 +110,7 @@ pub enum ManifestRecordError {
   /// Returned when decoding unknown manifest event.
   #[error("unknown manifest record type: {0}")]
   UnknownRecordType(#[from] UnknownManifestRecordType),
+  /// Returned when there is an invalid entry flag.
+  #[error("invalid entry flag: {0}")]
+  InvalidEntryFlag(ManifestEntryFlags),
 }

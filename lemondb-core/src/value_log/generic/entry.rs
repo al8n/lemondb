@@ -66,13 +66,13 @@ impl<'a, K: ?Sized, V: ?Sized> GenericEntry<'a, K, V> {
   }
 }
 
-impl<'a, K: ?Sized, V: ?Sized> core::fmt::Debug for GenericEntry<'a, K, V> {
+impl<K: ?Sized, V: ?Sized> core::fmt::Debug for GenericEntry<'_, K, V> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("GenericEntry").finish()
   }
 }
 
-impl<'a, K, V> Type for GenericEntry<'a, K, V>
+impl<K, V> Type for GenericEntry<'_, K, V>
 where
   K: ?Sized + core::fmt::Debug + Type,
   V: ?Sized + core::fmt::Debug + Type,
@@ -169,7 +169,7 @@ pub struct GenericEntryRef<'a, K: ?Sized + Type, V: ?Sized + Type> {
   value: Option<V::Ref<'a>>,
 }
 
-impl<'a, K, V> core::fmt::Debug for GenericEntryRef<'a, K, V>
+impl<K, V> core::fmt::Debug for GenericEntryRef<'_, K, V>
 where
   K: ?Sized + core::fmt::Debug + Type,
   V: ?Sized + core::fmt::Debug + Type,

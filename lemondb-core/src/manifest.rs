@@ -2,8 +2,10 @@ use core::{cmp::Reverse, sync::atomic::Ordering};
 
 use std::collections::{BTreeMap, HashSet};
 
-use aol::{Batch, Entry};
+use among::Among;
+use aol::{Batch, Entry, Record};
 use arbitrary_int::u63;
+use either::Either;
 
 use crate::types::{
   fid::{AtomicFid, Fid},
@@ -46,13 +48,19 @@ impl aol::Snapshot for Manifest {
   }
 
   #[inline]
-  fn validate(&self, entry: &Entry<Self::Record>) -> Result<(), Self::Error> {
+  fn validate(
+    &self,
+    entry: &Entry<Self::Record>,
+  ) -> Result<(), Either<<Self::Record as Record>::Error, Self::Error>> {
     self.validate_in(entry)
   }
 
   #[inline]
-  fn insert(&mut self, entry: aol::Entry<Self::Record>) -> Result<(), Self::Error> {
-    self.insert_in(entry)
+  fn insert(
+    &mut self,
+    entry: aol::Entry<Self::Record>,
+  ) -> Result<(), Either<<Self::Record as Record>::Error, Self::Error>> {
+    self.insert_in(entry).map_err(Either::Right)
   }
 
   fn clear(&mut self) -> Result<(), Self::Error> {
@@ -131,8 +139,18 @@ impl Manifest {
     self.tables.values().find(|table| table.name.eq(name))
   }
 
-  fn validate_in(&self, entry: &aol::Entry<ManifestRecord>) -> Result<(), ManifestError> {
+  fn validate_in(
+    &self,
+    entry: &aol::Entry<ManifestRecord>,
+  ) -> Result<(), Either<ManifestRecordError, ManifestError>> {
     let flag = entry.flag();
+
+    if !ManifestEntryFlags::is_possible_flag(flag.bits()) {
+      return Err(Either::Left(ManifestRecordError::InvalidEntryFlag(
+        flag.into(),
+      )));
+    }
+
     match entry.data() {
       ManifestRecord::Table { id, name } => {
         if flag.is_creation() {
@@ -141,16 +159,18 @@ impl Manifest {
               return Ok(());
             }
 
-            return Err(ManifestError::duplicate_table_id(
+            return Err(Either::Right(ManifestError::duplicate_table_id(
               *id,
               name.clone(),
               table.name.clone(),
-            ));
+            )));
           }
 
           for table in self.tables.values() {
             if table.name.eq(name) && !table.is_removed() {
-              return Err(ManifestError::TableAlreadyExists(name.clone()));
+              return Err(Either::Right(ManifestError::TableAlreadyExists(
+                name.clone(),
+              )));
             }
           }
 
@@ -162,14 +182,14 @@ impl Manifest {
             }
           }
 
-          Err(ManifestError::TableNotFound(*id))
+          Err(Either::Right(ManifestError::TableNotFound(*id)))
         }
       }
       ManifestRecord::Log { tid, .. } => {
         if self.tables.contains_key(&Reverse(*tid)) {
           Ok(())
         } else {
-          Err(ManifestError::TableNotFound(*tid))
+          Err(Either::Right(ManifestError::TableNotFound(*tid)))
         }
       }
     }
@@ -238,7 +258,7 @@ impl ManifestFile {
   pub fn open<P: AsRef<std::path::Path>>(
     dir: Option<P>,
     opts: ManifestOptions,
-  ) -> Result<Self, ManifestFileError> {
+  ) -> Result<Self, Among<ManifestRecordError, ManifestError, ManifestFileError>> {
     match dir {
       Some(dir) => disk::DiskManifest::open(dir, opts.rewrite_threshold, opts.version)
         .map(|file| {
@@ -268,7 +288,7 @@ impl ManifestFile {
 
   /// Appends an entry to the manifest file.
   #[inline]
-  pub fn append(&mut self, ent: ManifestEntry) -> Result<(), ManifestFileError> {
+  pub fn append(&mut self, ent: ManifestEntry) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>> {
     let ent = ent.into();
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append(ent).map_err(Into::into),
@@ -278,7 +298,7 @@ impl ManifestFile {
 
   /// Appends a batch of entries to the manifest file.
   #[inline]
-  pub fn append_batch<B>(&mut self, entries: B) -> Result<(), ManifestFileError>
+  pub fn append_batch<B>(&mut self, entries: B) -> Result<(), Among<ManifestRecordError, ManifestError, ManifestFileError>>
   where
     B: Batch<ManifestEntry, ManifestRecord>,
   {
