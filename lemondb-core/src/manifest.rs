@@ -1,22 +1,19 @@
-use core::{cmp::Reverse, mem, sync::atomic::Ordering};
+use core::{cmp::Reverse, sync::atomic::Ordering};
 
 use std::collections::{BTreeMap, HashSet};
 
-use aol::{
-  buffer::VacantBuffer,
-  error::{IncompleteBuffer, InsufficientBuffer},
-  Entry,
-};
+use aol::{Batch, Entry};
 use arbitrary_int::u63;
-use smol_str::SmolStr;
 
 use crate::types::{
   fid::{AtomicFid, Fid},
   table_id::{AtomicTableId, TableId},
-  table_name::TableName,
+  table_name::{TableName, DEFAULT_TABLE_NAME},
 };
 
 mod disk;
+mod entry;
+pub use entry::*;
 mod error;
 pub use error::*;
 mod memory;
@@ -67,181 +64,6 @@ impl aol::Snapshot for Manifest {
   }
 }
 
-/// The manifest record.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ManifestRecord {
-  /// Log record.
-  Log {
-    /// File ID.
-    fid: Fid,
-    /// Table ID.
-    tid: TableId,
-  },
-  /// Table record.
-  Table {
-    /// Table ID.
-    id: TableId,
-    /// Table name.
-    name: TableName,
-  },
-}
-
-impl ManifestRecord {
-  /// Creates a new log record.
-  #[inline]
-  pub fn log(fid: Fid, tid: TableId) -> Self {
-    Self::Log { fid, tid }
-  }
-
-  /// Creates a new table record.
-  #[inline]
-  pub fn table(table_id: TableId, name: TableName) -> Self {
-    Self::Table { id: table_id, name }
-  }
-}
-
-impl aol::Record for ManifestRecord {
-  type Error = ManifestRecordError;
-
-  fn encoded_size(&self) -> usize {
-    match self {
-      Self::Log { fid, tid, .. } => 1 + fid.encoded_len() + tid.encoded_len(),
-      Self::Table { id, name } => 1 + id.encoded_len() + mem::size_of::<u8>() + name.len(),
-    }
-  }
-
-  fn encode(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
-    let encoded_len = self.encoded_size();
-    let cap = buf.capacity();
-    if cap < encoded_len {
-      return Err(InsufficientBuffer::with_information(encoded_len, cap).into());
-    }
-
-    match self {
-      Self::Log { fid, tid } => {
-        let mut cur = 0;
-        buf.put_u8(0)?;
-        cur += 1;
-        cur += fid.encode_to_buffer(buf)?;
-        cur += tid.encode_to_buffer(buf)?;
-        Ok(cur)
-      }
-      Self::Table { id, name } => {
-        let mut cur = 0;
-        buf.put_u8(1)?;
-        cur += 1;
-        cur += id.encode_to_buffer(buf)?;
-
-        let remaining = buf.remaining();
-        let want = 1 + name.len();
-        if want > remaining {
-          return Err(InsufficientBuffer::with_information(cur + want, cur + remaining).into());
-        }
-
-        buf.put_u8(name.len() as u8)?;
-        cur += 1;
-        buf.put_slice(name.as_bytes())?;
-        cur += name.len();
-        Ok(cur)
-      }
-    }
-  }
-
-  fn decode(buf: &[u8]) -> Result<(usize, Self), Self::Error> {
-    if buf.is_empty() {
-      return Err(IncompleteBuffer::new().into());
-    }
-
-    let kind = buf[0];
-    let mut cur = 1;
-    Ok(match kind {
-      0 => {
-        let (n, fid) = Fid::decode(&buf[cur..])?;
-        cur += n;
-        let (n, tid) = TableId::decode(&buf[cur..])?;
-        cur += n;
-
-        (cur, Self::Log { fid, tid })
-      }
-      1 => {
-        let (n, id) = TableId::decode(&buf[cur..])?;
-
-        cur += n;
-        let len = buf[cur] as usize;
-        cur += 1;
-        if buf.len() < cur + len {
-          return Err(IncompleteBuffer::with_information(cur + len, buf.len()).into());
-        }
-
-        let name = SmolStr::from(core::str::from_utf8(&buf[cur..cur + len])?);
-        cur += len;
-        (
-          cur,
-          Self::Table {
-            id,
-            name: name.into(),
-          },
-        )
-      }
-      _ => {
-        return Err(Self::Error::UnknownRecordType(UnknownManifestRecordType(
-          kind,
-        )))
-      }
-    })
-  }
-}
-
-/// Manifest record type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(u8)]
-#[non_exhaustive]
-pub enum ManifestRecordType {
-  /// Add log event.
-  AddLog = 0,
-  /// Add vlog event.
-  AddVlog = 1,
-  /// Remove log event.
-  RemoveLog = 2,
-  /// Remove vlog event.
-  RemoveVlog = 3,
-  /// Add table event.
-  AddTable = 4,
-  /// Remove table event.
-  RemoveTable = 5,
-}
-
-impl TryFrom<u8> for ManifestRecordType {
-  type Error = UnknownManifestRecordType;
-
-  fn try_from(value: u8) -> Result<Self, Self::Error> {
-    Ok(match value {
-      0 => Self::AddLog,
-      1 => Self::AddVlog,
-      2 => Self::RemoveLog,
-      3 => Self::RemoveVlog,
-      4 => Self::AddTable,
-      5 => Self::RemoveTable,
-      _ => return Err(UnknownManifestRecordType(value)),
-    })
-  }
-}
-
-impl ManifestRecordType {
-  /// Returns `true` if the record is a creation event.
-  #[inline]
-  pub const fn is_creation(&self) -> bool {
-    matches!(self, Self::AddVlog | Self::AddLog | Self::AddTable)
-  }
-
-  /// Returns `true` if the record is a deletion event.
-  #[inline]
-  pub const fn is_deletion(&self) -> bool {
-    matches!(self, Self::RemoveVlog | Self::RemoveLog | Self::RemoveTable)
-  }
-}
-
 /// The table manifest.
 #[derive(Debug)]
 pub struct TableManifest {
@@ -249,7 +71,9 @@ pub struct TableManifest {
   id: TableId,
   removed: bool,
   vlogs: HashSet<Fid>,
-  logs: HashSet<Fid>,
+  active_logs: HashSet<Fid>,
+  frozen_logs: HashSet<Fid>,
+  bloomfilters: HashSet<Fid>,
 }
 
 impl TableManifest {
@@ -265,7 +89,9 @@ impl TableManifest {
       name,
       id,
       vlogs: HashSet::new(),
-      logs: HashSet::new(),
+      active_logs: HashSet::new(),
+      frozen_logs: HashSet::new(),
+      bloomfilters: HashSet::new(),
       removed: false,
     }
   }
@@ -360,12 +186,12 @@ impl Manifest {
             if flag.custom_flag().bit1() {
               table.vlogs.insert(fid);
             } else {
-              table.logs.insert(fid);
+              table.active_logs.insert(fid);
             }
           } else if flag.custom_flag().bit1() {
             table.vlogs.remove(&fid);
           } else {
-            table.logs.remove(&fid);
+            table.active_logs.remove(&fid);
           }
 
           Ok(())
@@ -374,6 +200,10 @@ impl Manifest {
         }
       }
       ManifestRecord::Table { id, name } => {
+        if name.eq(DEFAULT_TABLE_NAME) {
+          return Err(ManifestError::ReservedTable);
+        }
+
         if flag.is_creation() {
           self.last_table_id = self.last_table_id.max(id);
           self
@@ -438,7 +268,8 @@ impl ManifestFile {
 
   /// Appends an entry to the manifest file.
   #[inline]
-  pub fn append(&mut self, ent: Entry<ManifestRecord>) -> Result<(), ManifestFileError> {
+  pub fn append(&mut self, ent: ManifestEntry) -> Result<(), ManifestFileError> {
+    let ent = ent.into();
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append(ent).map_err(Into::into),
       ManifestFileKind::Disk(d) => d.append(ent).map_err(Into::into),
@@ -447,10 +278,10 @@ impl ManifestFile {
 
   /// Appends a batch of entries to the manifest file.
   #[inline]
-  pub fn append_batch(
-    &mut self,
-    entries: Vec<Entry<ManifestRecord>>,
-  ) -> Result<(), ManifestFileError> {
+  pub fn append_batch<B>(&mut self, entries: B) -> Result<(), ManifestFileError>
+  where
+    B: Batch<ManifestEntry, ManifestRecord>,
+  {
     match &mut self.kind {
       ManifestFileKind::Memory(m) => m.append_batch(entries).map_err(Into::into),
       ManifestFileKind::Disk(d) => d.append_batch(entries).map_err(Into::into),

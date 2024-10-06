@@ -35,10 +35,10 @@ impl DiskManifest {
   }
 
   #[inline]
-  pub(super) fn append_batch(
-    &mut self,
-    entries: Vec<Entry<ManifestRecord>>,
-  ) -> Result<(), ManifestFileError> {
+  pub(super) fn append_batch<B>(&mut self, entries: B) -> Result<(), ManifestFileError>
+  where
+    B: Batch<ManifestEntry, ManifestRecord>,
+  {
     self.log.append_batch(entries).map_err(Into::into)
   }
 

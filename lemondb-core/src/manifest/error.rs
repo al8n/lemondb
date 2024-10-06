@@ -11,10 +11,7 @@ use crate::{
   },
 };
 
-/// Unknown manifest event.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
-#[error("unknown manifest record type: {0}")]
-pub struct UnknownManifestRecordType(pub(crate) u8);
+use super::UnknownManifestRecordType;
 
 /// An error that occurs when manipulating the manifest file.
 #[derive(Debug, From, Into, Deref, AsRef)]
@@ -63,6 +60,9 @@ pub enum ManifestError {
   /// Table already exists.
   #[error("table {0} already exists")]
   TableAlreadyExists(TableName),
+  /// Returned when trying to create or delete the default table.
+  #[error("cannot create or delete the default table")]
+  ReservedTable,
   /// Table name is too long.
   #[error("table name is too long: the maximum length is 255 bytes, but got {0}")]
   LargeTableName(usize),

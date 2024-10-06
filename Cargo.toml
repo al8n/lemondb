@@ -2,6 +2,9 @@
 members = ["lemondb", "lemondb-core", "async-lemondb"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.81.0"
+
 [workspace.dependencies]
 among = "0.1"
 ahash = { version = "0.8", default-features = false }
@@ -20,10 +23,11 @@ once_cell = { version = "1", default-features = false }
 
 # utils
 dbutils = { version = "0.5", default-features = false, features = ["default"] }
+paste = "1"
 zerocopy = { version = "0.7", features = ["derive"] }
 
 # write ahead logs
-aol = { version = "0.2", default-features = false, features = ["std"] }
+aol = { version = "0.2", path = "../aol", default-features = false, features = ["std"] }
 dtlog = { version = "0.1", default-features = false, features = ["memmap"] }
 orderwal = { version = "0.4", path = "../orderwal", default-features = false, features = ["std"] }
 skl = { version = "0.16", path = "../skl-rs", default-features = false, features = ["memmap"] }
@@ -36,6 +40,9 @@ time = "0.3"
 thiserror = "1"
 tracing = "0.1"
 viewit = "0.1.5"
+
+# core library
+lemondb-core = { version = "0.1", path = "lemondb-core", default-features = false }
 
 [packages.lints.rust]
 rust_2018_idioms = "warn"

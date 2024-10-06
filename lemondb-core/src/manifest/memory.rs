@@ -22,7 +22,7 @@ impl MemoryManifest {
   #[inline]
   pub(super) fn append_batch<B>(&mut self, entries: B) -> Result<(), ManifestError>
   where
-    B: Batch<ManifestRecord>,
+    B: Batch<ManifestEntry, ManifestRecord>,
   {
     self.manifest.insert_batch(entries)
   }

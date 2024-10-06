@@ -2,7 +2,7 @@
 name = "lemondb-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.81.0"
+rust-version.workspace = true
 
 [features]
 default = ["std", "ttl"]
@@ -20,6 +20,7 @@ dbutils.workspace = true
 dtlog.workspace = true
 either.workspace = true
 orderwal.workspace = true
+paste.workspace = true
 ref-cast.workspace = true
 skl.workspace = true
 smol_str.workspace = true

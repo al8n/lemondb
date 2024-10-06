@@ -4,6 +4,9 @@ use std::{borrow::Cow, sync::Arc};
 use derive_more::{Deref, Display, From, Into};
 use smol_str::{SmolStr, SmolStrBuilder};
 
+/// The default table name.
+pub const DEFAULT_TABLE_NAME: &str = "default";
+
 macro_rules! impl_from {
   ($($ty:ty), +$(,)?) => {
     $(
@@ -30,6 +33,13 @@ impl_from!(
 /// A table id.
 #[derive(Debug, Display, Deref, From, Into, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TableName(SmolStr);
+
+impl Default for TableName {
+  #[inline]
+  fn default() -> Self {
+    Self::from(DEFAULT_TABLE_NAME)
+  }
+}
 
 impl AsRef<str> for TableName {
   #[inline]

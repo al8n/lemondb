@@ -1,4 +1,4 @@
-use crate::Fid;
+use lemondb_core::types::fid::Fid;
 
 const MB: usize = 1 << 20;
 const GB: usize = 1 << 30;
