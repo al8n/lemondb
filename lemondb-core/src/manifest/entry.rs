@@ -4,7 +4,7 @@ use crate::types::{fid::Fid, table_id::TableId, table_name::TableName};
 
 use super::ManifestRecordError;
 
-use aol::{CustomFlags, Entry, EntryFlags};
+use aol::{CustomFlags, Entry, EntryFlags, RecordRef};
 use dbutils::{
   buffer::VacantBuffer,
   error::{IncompleteBuffer, InsufficientBuffer},
@@ -53,6 +53,7 @@ impl ManifestRecord {
 
 impl aol::Record for ManifestRecord {
   type Error = ManifestRecordError;
+  type Ref<'a> = ManifestRecordRef<'a>;
 
   fn encoded_size(&self) -> usize {
     match self {
@@ -97,8 +98,40 @@ impl aol::Record for ManifestRecord {
       }
     }
   }
+}
 
-  fn decode(buf: &[u8]) -> Result<(usize, Self), Self::Error> {
+/// A reference to the manifest record.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ManifestRecordRef<'a> {
+  /// Log record.
+  Log {
+    /// File ID.
+    fid: Fid,
+    /// Table ID.
+    tid: TableId,
+  },
+  /// Table record.
+  Table {
+    /// Table ID.
+    id: TableId,
+    /// Table name.
+    name: &'a str,
+  },
+}
+
+impl ManifestRecordRef<'_> {
+  pub(super) fn to_owned(&self) -> ManifestRecord {
+    match self {
+      Self::Log { fid, tid } => ManifestRecord::log(*fid, *tid),
+      Self::Table { id, name } => ManifestRecord::table(*id, SmolStr::from(*name).into()),
+    }
+  }
+}
+
+impl<'a> RecordRef<'a> for ManifestRecordRef<'a> {
+  type Error = ManifestRecordError;
+
+  fn decode(buf: &'a [u8]) -> Result<(usize, Self), Self::Error> {
     if buf.is_empty() {
       return Err(IncompleteBuffer::new().into());
     }
@@ -124,15 +157,9 @@ impl aol::Record for ManifestRecord {
           return Err(IncompleteBuffer::with_information(cur + len, buf.len()).into());
         }
 
-        let name = SmolStr::from(core::str::from_utf8(&buf[cur..cur + len])?);
+        let name = core::str::from_utf8(&buf[cur..cur + len])?;
         cur += len;
-        (
-          cur,
-          Self::Table {
-            id,
-            name: name.into(),
-          },
-        )
+        (cur, Self::Table { id, name })
       }
       _ => {
         return Err(Self::Error::UnknownRecordType(UnknownManifestRecordType(

@@ -20,7 +20,7 @@ impl MemoryManifest {
     entry: aol::Entry<ManifestRecord>,
   ) -> Result<(), Either<ManifestRecordError, ManifestError>> {
     self.manifest.validate(entry.as_ref()).map(|_| {
-      self.manifest.insert(entry);
+      self.manifest.insert(entry.into());
     })
   }
 

@@ -249,46 +249,62 @@ fn test_manifest_file() {
     };
   }
 
-  // 3. try to create an entry has the same id with the existing table, and the name is different
-  {
-    let ent = ManifestEntry::create_table(tid, "baz".into());
-    let ManifestError::DuplicateTableId { id, name, existing } =
-      file.append(ent.clone()).unwrap_err().unwrap_middle()
-    else {
-      panic!("wrong error")
-    };
-    assert_eq!(id, tid);
-    assert_eq!(name, "baz");
-    assert_eq!(existing, "foo");
-
-    let ManifestError::DuplicateTableId { id, name, existing } =
-      file.append_batch([ent]).unwrap_err().unwrap_middle()
-    else {
-      panic!("wrong error")
-    };
-    assert_eq!(id, tid);
-    assert_eq!(name, "baz");
-    assert_eq!(existing, "foo");
+  // Now let us trigger the rewrite
+  for i in 10..1510u32 {
+    file
+      .append(ManifestEntry::delete_active_log(
+        Fid::from(i),
+        TableId::new(0),
+      ))
+      .unwrap();
   }
 
-  // 4. try to create two tables with the same id
   {
-    let nid = tid.next();
-    let ent1 = ManifestEntry::create_table(nid, "baz".into());
-    let ent2 = ManifestEntry::create_table(nid, "qux".into());
+    let manifest = file.manifest();
+    assert_eq!(manifest.tables().len(), 1, "{:?}", manifest.tables());
 
-    let ManifestError::DuplicateTableId { id, name, existing } =
-      file.append_batch([ent1, ent2]).unwrap_err().unwrap_middle()
-    else {
-      panic!("wrong error")
-    };
-    assert_eq!(id, nid);
-    assert_eq!(name, "qux");
-    assert_eq!(existing, "baz");
+    let table = manifest.get_table("foo").unwrap();
+    assert_eq!(table.id(), tid);
+    assert_eq!(table.name(), "foo");
+
+    let active_logs = table.active_logs();
+    assert_eq!(active_logs.len(), 1);
+    assert!(!active_logs.contains(&fid));
+    assert!(active_logs.contains(&fid.next()));
+
+    let value_logs = table.value_logs();
+    assert!(value_logs.contains(&new_vlog_id));
+    assert!(!value_logs.contains(&fid));
+
+    assert!(table.frozen_logs().is_empty());
+    assert!(table.bloomfilters().is_empty());
   }
 
-  // // Now let us trigger the rewrite
-  // for i in 10..1510 {
+  drop(file);
+  let file = ManifestFile::open(
+    Some(dir.path()),
+    ManifestOptions::new().with_rewrite_threshold(1000),
+  )
+  .unwrap();
 
-  // }
+  {
+    let manifest = file.manifest();
+    assert_eq!(manifest.tables().len(), 1, "{:?}", manifest.tables());
+
+    let table = manifest.get_table("foo").unwrap();
+    assert_eq!(table.id(), tid);
+    assert_eq!(table.name(), "foo");
+
+    let active_logs = table.active_logs();
+    assert_eq!(active_logs.len(), 1);
+    assert!(!active_logs.contains(&fid));
+    assert!(active_logs.contains(&fid.next()));
+
+    let value_logs = table.value_logs();
+    assert!(value_logs.contains(&new_vlog_id));
+    assert!(!value_logs.contains(&fid));
+
+    assert!(table.frozen_logs().is_empty());
+    assert!(table.bloomfilters().is_empty());
+  }
 }

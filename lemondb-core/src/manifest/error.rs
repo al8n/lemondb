@@ -66,23 +66,6 @@ pub enum ManifestError {
   /// Table name is too long.
   #[error("table name is too long: the maximum length is 255 bytes, but got {0}")]
   LargeTableName(usize),
-  /// Returned when there is a duplicate table id.
-  #[error("duplicate table id: {id}")]
-  DuplicateTableId {
-    /// The table id.
-    id: TableId,
-    /// The table name.
-    name: TableName,
-    /// The existing table name.
-    existing: TableName,
-  },
-}
-
-impl ManifestError {
-  #[inline]
-  pub(super) fn duplicate_table_id(id: TableId, name: TableName, existing: TableName) -> Self {
-    Self::DuplicateTableId { id, name, existing }
-  }
 }
 
 /// An error that occurs when manipulating the manifest record.

@@ -3,7 +3,7 @@ use core::{borrow::Borrow, cmp::Reverse, sync::atomic::Ordering};
 use std::collections::{BTreeMap, HashSet};
 
 use among::Among;
-use aol::{Batch, Entry, Record};
+use aol::{Batch, Entry, MaybeEntryRef, Record};
 use arbitrary_int::u63;
 use either::Either;
 use smallvec_wrapper::LargeVec;
@@ -51,6 +51,44 @@ impl aol::Snapshot for Manifest {
       && self.deletions > MANIFEST_DELETIONS_RATIO * self.creations.saturating_sub(self.deletions)
   }
 
+  fn contains(&self, entry: &Entry<ManifestRecordRef<'_>>) -> bool {
+    let flag = ManifestEntryFlags(entry.flag());
+    if flag.is_creation() {
+      match entry.record() {
+        ManifestRecordRef::Table { id, .. } => {
+          // if the table is in remove state, we should not consider it as existing
+          // so even this is a creation entry, we should return false.
+          return self.tables.contains_key(&Reverse(*id));
+        }
+        ManifestRecordRef::Log { tid, fid } => {
+          // if the table is in remove state, we should not consider it as existing
+          // so even this is a creation entry, we should return false.
+          let Some(t) = self.tables.get(&Reverse(*tid)) else {
+            return false;
+          };
+
+          match () {
+            _ if flag.is_active_log() => {
+              return t.active_logs.contains(fid);
+            }
+            _ if flag.is_frozen_log() => {
+              return t.frozen_logs.contains(fid);
+            }
+            _ if flag.is_bloomfilter() => {
+              return t.bloomfilters.contains(fid);
+            }
+            _ if flag.is_value_log() => {
+              return t.vlogs.contains(fid);
+            }
+            _ => unreachable!(),
+          }
+        }
+      }
+    }
+
+    false
+  }
+
   fn validate(
     &self,
     entry: &Entry<Self::Record>,
@@ -63,25 +101,17 @@ impl aol::Snapshot for Manifest {
       )));
     }
 
-    match entry.data() {
+    match entry.record() {
       ManifestRecord::Table { id, name } => {
         if name.eq(DEFAULT_TABLE_NAME) {
           return Err(Either::Right(ManifestError::ReservedTable));
         }
 
+        if name.len() > TableName::MAX_LENGTH {
+          return Err(Either::Right(ManifestError::LargeTableName(name.len())));
+        }
+
         if flag.is_creation() {
-          if let Some(table) = self.tables.get(&Reverse(*id)) {
-            if table.name.eq(name) {
-              return Ok(());
-            }
-
-            return Err(Either::Right(ManifestError::duplicate_table_id(
-              *id,
-              name.clone(),
-              table.name.clone(),
-            )));
-          }
-
           for table in self.tables.values() {
             if table.name.eq(name) && !table.is_removed() {
               return Err(Either::Right(ManifestError::TableAlreadyExists(
@@ -131,30 +161,17 @@ impl aol::Snapshot for Manifest {
         return Err(Either::Left(ManifestRecordError::InvalidEntryFlag(flag)));
       }
 
-      match entry.data() {
+      match entry.record() {
         ManifestRecord::Table { id, name } => {
           if name.eq(DEFAULT_TABLE_NAME) {
             return Err(Either::Right(ManifestError::ReservedTable));
           }
 
-          if flag.is_creation() {
-            if let Some(table) = {
-              self.tables.get(&Reverse(*id)).map(|t| &t.name).or_else(|| {
-                new_tables
-                  .binary_search_by_key(id, |&(id, _)| id)
-                  .map(|idx| new_tables[idx].1)
-                  .ok()
-              })
-            } {
-              if !table.eq(name) {
-                return Err(Either::Right(ManifestError::duplicate_table_id(
-                  *id,
-                  name.clone(),
-                  table.clone(),
-                )));
-              }
-            }
+          if name.len() > TableName::MAX_LENGTH {
+            return Err(Either::Right(ManifestError::LargeTableName(name.len())));
+          }
 
+          if flag.is_creation() {
             for table in self
               .tables
               .values()
@@ -177,6 +194,13 @@ impl aol::Snapshot for Manifest {
               }
             }
 
+            if let Ok(idx) = new_tables.binary_search_by_key(id, |&(id, _)| id) {
+              let (_, old_name) = new_tables[idx];
+              if old_name.eq(name) {
+                new_tables.remove(idx);
+              }
+            }
+
             return Err(Either::Right(ManifestError::TableNotFound(*id)));
           }
         }
@@ -196,7 +220,11 @@ impl aol::Snapshot for Manifest {
   }
 
   #[inline]
-  fn insert(&mut self, entry: aol::Entry<Self::Record>) {
+  fn insert(&mut self, entry: MaybeEntryRef<'_, Self::Record>) {
+    let entry = match entry.into_inner() {
+      Either::Left(entry) => entry.map(|r| r.to_owned()),
+      Either::Right(entry) => entry,
+    };
     self.insert_in(entry)
   }
 
@@ -321,7 +349,7 @@ impl Manifest {
 
   fn insert_in(&mut self, entry: aol::Entry<ManifestRecord>) {
     let flag = ManifestEntryFlags(entry.flag());
-    let record = entry.into_data();
+    let record = entry.into_record();
 
     match record {
       ManifestRecord::Log { fid, tid } => {

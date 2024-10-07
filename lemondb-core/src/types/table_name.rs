@@ -34,6 +34,11 @@ impl_from!(
 #[derive(Debug, Display, Deref, From, Into, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TableName(SmolStr);
 
+impl TableName {
+  /// The maximum length of the table name.
+  pub const MAX_LENGTH: usize = u8::MAX as usize;
+}
+
 impl Default for TableName {
   #[inline]
   fn default() -> Self {
