@@ -37,6 +37,12 @@ impl Fid {
     Self(id)
   }
 
+  /// Returns the the next file ID.
+  #[inline]
+  pub fn next(&self) -> Self {
+    Self(self.0 + u63::new(1))
+  }
+
   /// Encodes the file id into the given buffer.
   #[inline]
   pub fn encode(&self, buf: &mut [u8]) -> Result<usize, FidError> {
@@ -99,10 +105,11 @@ impl TryFrom<u64> for Fid {
 
   #[inline]
   fn try_from(id: u64) -> Result<Self, Self::Error> {
-    if id > u63::MAX.into() {
-      Err(LargeFid(id))
+    const MAX_U63: u64 = 2u64.pow(63) - 1;
+    if id <= MAX_U63 {
+      Ok(Self(u63::new(id)))
     } else {
-      Ok(Self(id.into()))
+      Err(LargeFid(id))
     }
   }
 }
@@ -110,14 +117,14 @@ impl TryFrom<u64> for Fid {
 impl From<Fid> for u64 {
   #[inline]
   fn from(fid: Fid) -> Self {
-    fid.0.into()
+    fid.0.value()
   }
 }
 
 impl From<&Fid> for u64 {
   #[inline]
   fn from(fid: &Fid) -> Self {
-    fid.0.into()
+    fid.0.value()
   }
 }
 

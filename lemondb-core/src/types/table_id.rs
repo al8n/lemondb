@@ -6,29 +6,19 @@ use dbutils::{
   leb128::{decode_u16_varint, encode_u16_varint, encoded_u16_varint_len, DecodeVarintError},
 };
 use derive_more::{Display, From, Into};
-use zerocopy::{FromBytes, FromZeroes};
+use zerocopy::FromBytes;
 
 /// Table id
 #[derive(
-  Copy,
-  Clone,
-  Debug,
-  Display,
-  From,
-  Into,
-  Default,
-  PartialEq,
-  Eq,
-  PartialOrd,
-  Ord,
-  Hash,
-  FromBytes,
-  FromZeroes,
+  Copy, Clone, Debug, Display, From, Into, Default, PartialEq, Eq, PartialOrd, Ord, Hash, FromBytes,
 )]
 #[repr(transparent)]
 pub struct TableId(u16);
 
 impl TableId {
+  /// The default table id.
+  pub const DEFAULT: Self = Self(0);
+
   /// Creates a new instance of the table id.
   #[inline]
   pub const fn new(id: u16) -> Self {

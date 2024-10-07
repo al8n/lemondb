@@ -1,4 +1,4 @@
-use core::{cmp::Reverse, sync::atomic::Ordering};
+use core::{borrow::Borrow, cmp::Reverse, sync::atomic::Ordering};
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -6,6 +6,7 @@ use among::Among;
 use aol::{Batch, Entry, Record};
 use arbitrary_int::u63;
 use either::Either;
+use smallvec_wrapper::LargeVec;
 
 use crate::types::{
   fid::{AtomicFid, Fid},
@@ -21,6 +22,9 @@ pub use error::*;
 mod memory;
 mod options;
 pub use options::ManifestOptions;
+
+#[cfg(test)]
+mod tests;
 
 const MANIFEST_DELETIONS_RATIO: usize = 10;
 
@@ -47,20 +51,153 @@ impl aol::Snapshot for Manifest {
       && self.deletions > MANIFEST_DELETIONS_RATIO * self.creations.saturating_sub(self.deletions)
   }
 
-  #[inline]
   fn validate(
     &self,
     entry: &Entry<Self::Record>,
   ) -> Result<(), Either<<Self::Record as Record>::Error, Self::Error>> {
-    self.validate_in(entry)
+    let flag = entry.flag();
+
+    if !ManifestEntryFlags::is_possible_flag(flag.bits()) {
+      return Err(Either::Left(ManifestRecordError::InvalidEntryFlag(
+        ManifestEntryFlags(flag),
+      )));
+    }
+
+    match entry.data() {
+      ManifestRecord::Table { id, name } => {
+        if name.eq(DEFAULT_TABLE_NAME) {
+          return Err(Either::Right(ManifestError::ReservedTable));
+        }
+
+        if flag.is_creation() {
+          if let Some(table) = self.tables.get(&Reverse(*id)) {
+            if table.name.eq(name) {
+              return Ok(());
+            }
+
+            return Err(Either::Right(ManifestError::duplicate_table_id(
+              *id,
+              name.clone(),
+              table.name.clone(),
+            )));
+          }
+
+          for table in self.tables.values() {
+            if table.name.eq(name) && !table.is_removed() {
+              return Err(Either::Right(ManifestError::TableAlreadyExists(
+                name.clone(),
+              )));
+            }
+          }
+
+          Ok(())
+        } else {
+          if let Some(table) = self.tables.get(&Reverse(*id)) {
+            if table.name.eq(name) {
+              return Ok(());
+            }
+          }
+
+          Err(Either::Right(ManifestError::TableNotFound(*id)))
+        }
+      }
+      ManifestRecord::Log { tid, .. } => {
+        if !self.tables.contains_key(&Reverse(*tid)) && TableId::DEFAULT.ne(tid)
+        // we do not create the default table, but default table is always valid
+        {
+          return Err(Either::Right(ManifestError::TableNotFound(*tid)));
+        }
+
+        Ok(())
+      }
+    }
+  }
+
+  fn validate_batch<I, B>(
+    &self,
+    entries: &B,
+  ) -> Result<(), Either<<Self::Record as Record>::Error, Self::Error>>
+  where
+    B: Batch<I, Self::Record>,
+    I: AsRef<Entry<Self::Record>> + Into<Entry<Self::Record>>,
+  {
+    let mut new_tables = LargeVec::<(TableId, &TableName)>::new();
+
+    for ent in entries.iter() {
+      let entry = ent.as_ref();
+      let flag = ManifestEntryFlags(entry.flag());
+
+      if !ManifestEntryFlags::is_possible_flag(flag.bits()) {
+        return Err(Either::Left(ManifestRecordError::InvalidEntryFlag(flag)));
+      }
+
+      match entry.data() {
+        ManifestRecord::Table { id, name } => {
+          if name.eq(DEFAULT_TABLE_NAME) {
+            return Err(Either::Right(ManifestError::ReservedTable));
+          }
+
+          if flag.is_creation() {
+            if let Some(table) = {
+              self.tables.get(&Reverse(*id)).map(|t| &t.name).or_else(|| {
+                new_tables
+                  .binary_search_by_key(id, |&(id, _)| id)
+                  .map(|idx| new_tables[idx].1)
+                  .ok()
+              })
+            } {
+              if !table.eq(name) {
+                return Err(Either::Right(ManifestError::duplicate_table_id(
+                  *id,
+                  name.clone(),
+                  table.clone(),
+                )));
+              }
+            }
+
+            for table in self
+              .tables
+              .values()
+              .map(|t| &t.name)
+              .chain(new_tables.iter().map(|(_, n)| *n))
+            {
+              if table.eq(name) {
+                return Err(Either::Right(ManifestError::TableAlreadyExists(
+                  name.clone(),
+                )));
+              }
+            }
+
+            new_tables.push((*id, name));
+            new_tables.sort_unstable_by_key(|&(id, _)| id);
+          } else {
+            if let Some(table) = self.tables.get(&Reverse(*id)) {
+              if table.name.eq(name) {
+                continue;
+              }
+            }
+
+            return Err(Either::Right(ManifestError::TableNotFound(*id)));
+          }
+        }
+        ManifestRecord::Log { tid, .. } => {
+          if !self.tables.contains_key(&Reverse(*tid))
+            && new_tables.binary_search_by_key(tid, |&(id, _)| id).is_err()
+            && TableId::DEFAULT.ne(tid)
+          // we do not create the default table, but default table is always valid
+          {
+            return Err(Either::Right(ManifestError::TableNotFound(*tid)));
+          }
+        }
+      }
+    }
+
+    Ok(())
   }
 
   #[inline]
-  fn insert(
-    &mut self,
-    entry: aol::Entry<Self::Record>,
-  ) -> Result<(), Either<<Self::Record as Record>::Error, Self::Error>> {
-    self.insert_in(entry).map_err(Either::Right)
+  fn insert(&mut self, entry: aol::Entry<Self::Record>) {
+    self.insert_in(entry)
   }
 
   fn clear(&mut self) -> Result<(), Self::Error> {
@@ -89,6 +226,36 @@ impl TableManifest {
   #[inline]
   pub fn id(&self) -> TableId {
     self.id
+  }
+
+  /// Returns the table name.
+  #[inline]
+  pub fn name(&self) -> &TableName {
+    &self.name
+  }
+
+  /// Returns the value logs id.
+  #[inline]
+  pub fn value_logs(&self) -> &HashSet<Fid> {
+    &self.vlogs
+  }
+
+  /// Returns the active logs id.
+  #[inline]
+  pub fn active_logs(&self) -> &HashSet<Fid> {
+    &self.active_logs
+  }
+
+  /// Returns the frozen logs id.
+  #[inline]
+  pub fn frozen_logs(&self) -> &HashSet<Fid> {
+    &self.frozen_logs
+  }
+
+  /// Returns the bloomfilters id.
+  #[inline]
+  pub fn bloomfilters(&self) -> &HashSet<Fid> {
+    &self.bloomfilters
   }
 
   #[inline]
@@ -135,68 +302,25 @@ impl Manifest {
 
   /// Returns the table with the given ID.
   #[inline]
-  pub fn get_table(&self, name: &str) -> Option<&TableManifest> {
-    self.tables.values().find(|table| table.name.eq(name))
+  pub fn get_table<Q>(&self, name: &Q) -> Option<&TableManifest>
+  where
+    TableName: Borrow<Q>,
+    Q: ?Sized + Ord,
+  {
+    self
+      .tables
+      .values()
+      .find(|table| table.name.borrow().eq(name))
   }
 
-  fn validate_in(
-    &self,
-    entry: &aol::Entry<ManifestRecord>,
-  ) -> Result<(), Either<ManifestRecordError, ManifestError>> {
-    let flag = entry.flag();
-
-    if !ManifestEntryFlags::is_possible_flag(flag.bits()) {
-      return Err(Either::Left(ManifestRecordError::InvalidEntryFlag(
-        flag.into(),
-      )));
-    }
-
-    match entry.data() {
-      ManifestRecord::Table { id, name } => {
-        if flag.is_creation() {
-          if let Some(table) = self.tables.get(&Reverse(*id)) {
-            if table.name.eq(name) {
-              return Ok(());
-            }
-
-            return Err(Either::Right(ManifestError::duplicate_table_id(
-              *id,
-              name.clone(),
-              table.name.clone(),
-            )));
-          }
-
-          for table in self.tables.values() {
-            if table.name.eq(name) && !table.is_removed() {
-              return Err(Either::Right(ManifestError::TableAlreadyExists(
-                name.clone(),
-              )));
-            }
-          }
-
-          Ok(())
-        } else {
-          if let Some(table) = self.tables.get(&Reverse(*id)) {
-            if table.name.eq(name) {
-              return Ok(());
-            }
-          }
-
-          Err(Either::Right(ManifestError::TableNotFound(*id)))
-        }
-      }
-      ManifestRecord::Log { tid, .. } => {
-        if self.tables.contains_key(&Reverse(*tid)) {
-          Ok(())
-        } else {
-          Err(Either::Right(ManifestError::TableNotFound(*tid)))
-        }
-      }
-    }
+  /// Returns all the tables
+  #[inline]
+  pub fn tables(&self) -> &BTreeMap<Reverse<TableId>, TableManifest> {
+    &self.tables
   }
 
-  fn insert_in(&mut self, entry: aol::Entry<ManifestRecord>) -> Result<(), ManifestError> {
-    let flag = ManifestEntryFlags::from(entry.flag());
+  fn insert_in(&mut self, entry: aol::Entry<ManifestRecord>) {
+    let flag = ManifestEntryFlags(entry.flag());
     let record = entry.into_data();
 
     match record {
@@ -210,6 +334,7 @@ impl Manifest {
               _ if flag.is_value_log() => table.vlogs.insert(fid),
               _ => unreachable!(),
             };
+            self.creations += 1;
           } else {
             match () {
               _ if flag.is_active_log() => table.active_logs.remove(&fid),
@@ -218,28 +343,20 @@ impl Manifest {
               _ if flag.is_value_log() => table.vlogs.remove(&fid),
               _ => unreachable!(),
             };
+            self.deletions += 1;
           }
-
-          Ok(())
-        } else {
-          Err(ManifestError::TableNotFound(tid))
         }
       }
       ManifestRecord::Table { id, name } => {
-        if name.eq(DEFAULT_TABLE_NAME) {
-          return Err(ManifestError::ReservedTable);
-        }
-
         if flag.is_creation() {
           self.last_table_id = self.last_table_id.max(id);
           self
             .tables
             .insert(Reverse(id), TableManifest::new(id, name));
-          Ok(())
-        } else if self.tables.remove(&Reverse(id)).is_some() {
-          Ok(())
+          self.creations += 1;
         } else {
-          Err(ManifestError::TableNotFound(id))
+          self.deletions += 1;
+          self.tables.remove(&Reverse(id));
         }
       }
     }

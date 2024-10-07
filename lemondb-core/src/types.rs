@@ -45,3 +45,6 @@ pub mod table_name;
 
 /// The table ID in the database.
 pub mod table_id;
+
+/// The log extension in the database.
+pub mod log_extension;

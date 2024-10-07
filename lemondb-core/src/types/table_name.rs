@@ -55,10 +55,66 @@ impl Borrow<str> for TableName {
   }
 }
 
+impl Borrow<SmolStr> for TableName {
+  #[inline]
+  fn borrow(&self) -> &SmolStr {
+    &self.0
+  }
+}
+
 impl PartialEq<str> for TableName {
   #[inline]
   fn eq(&self, other: &str) -> bool {
     self.0.as_str() == other
+  }
+}
+
+impl PartialEq<&str> for TableName {
+  #[inline]
+  fn eq(&self, other: &&str) -> bool {
+    self.0.as_str() == *other
+  }
+}
+
+impl PartialEq<String> for TableName {
+  #[inline]
+  fn eq(&self, other: &String) -> bool {
+    self.0.as_str() == other.as_str()
+  }
+}
+
+impl PartialEq<TableName> for str {
+  #[inline]
+  fn eq(&self, other: &TableName) -> bool {
+    self == other.0.as_str()
+  }
+}
+
+impl PartialEq<TableName> for &str {
+  #[inline]
+  fn eq(&self, other: &TableName) -> bool {
+    *self == other.0.as_str()
+  }
+}
+
+impl PartialEq<TableName> for String {
+  #[inline]
+  fn eq(&self, other: &TableName) -> bool {
+    self.as_str() == other.0.as_str()
+  }
+}
+
+impl PartialEq<SmolStr> for TableName {
+  #[inline]
+  fn eq(&self, other: &SmolStr) -> bool {
+    &self.0 == other
+  }
+}
+
+impl PartialEq<TableName> for SmolStr {
+  #[inline]
+  fn eq(&self, other: &TableName) -> bool {
+    self == &other.0
   }
 }
 

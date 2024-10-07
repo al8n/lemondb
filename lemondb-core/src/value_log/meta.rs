@@ -1,5 +1,5 @@
 use dbutils::buffer::VacantBuffer;
-use zerocopy::{FromBytes, FromZeroes};
+use zerocopy::FromBytes;
 
 /// The metadata for the value log.
 ///
@@ -20,7 +20,7 @@ use zerocopy::{FromBytes, FromZeroes};
 ///   | 63 bits for version |   1 bit for tombstone mark   |
 ///   +---------------------+----------------------------------+
 ///   ```
-#[derive(Copy, Clone, Eq, PartialEq, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Eq, PartialEq, FromBytes)]
 #[repr(C, align(8))]
 pub struct Meta {
   /// 63 bits for version, 1 bit for tombstone mark

@@ -19,7 +19,9 @@ impl MemoryManifest {
     &mut self,
     entry: aol::Entry<ManifestRecord>,
   ) -> Result<(), Either<ManifestRecordError, ManifestError>> {
-    self.manifest.insert(entry)
+    self.manifest.validate(entry.as_ref()).map(|_| {
+      self.manifest.insert(entry);
+    })
   }
 
   #[inline]
@@ -30,7 +32,9 @@ impl MemoryManifest {
   where
     B: Batch<ManifestEntry, ManifestRecord>,
   {
-    self.manifest.insert_batch(entries)
+    self.manifest.validate_batch(&entries).map(|_| {
+      self.manifest.insert_batch(entries);
+    })
   }
 
   #[inline]

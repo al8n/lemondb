@@ -9,7 +9,7 @@ use dbutils::{
   buffer::VacantBuffer,
   error::{IncompleteBuffer, InsufficientBuffer},
 };
-use derive_more::{AsRef, From, Into};
+use derive_more::{AsRef, Into};
 use smol_str::SmolStr;
 
 /// Unknown manifest event.
@@ -157,8 +157,8 @@ impl aol::Record for ManifestRecord {
 /// - The sixth bit of the manifest entry indicating it is a value log event or not.
 ///   - `1`: Value log event.
 /// - The seventh and eighth bits are reserved for future use.
-#[derive(Debug, Clone, Copy, From, Into, PartialEq, Eq, Hash)]
-pub struct ManifestEntryFlags(EntryFlags);
+#[derive(Debug, Clone, Copy, Into, PartialEq, Eq, Hash)]
+pub struct ManifestEntryFlags(pub(super) EntryFlags);
 
 impl core::fmt::Display for ManifestEntryFlags {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -249,8 +249,8 @@ impl ManifestEntryFlags {
 }
 
 /// An entry in the manifest log.
-#[derive(Debug, From, Into, AsRef)]
-pub struct ManifestEntry(Entry<ManifestRecord>);
+#[derive(Debug, Into, AsRef, Clone)]
+pub struct ManifestEntry(pub(super) Entry<ManifestRecord>);
 
 macro_rules! manifest_entry_constructors {
   ($($name: ident $($log:ident)?), +$(,)?) => {
@@ -267,7 +267,7 @@ macro_rules! manifest_entry_constructors {
         /// assert!(entry.flag().is_creation());
         /// ```
         #[inline]
-        pub const fn [< create_ $name _log>](fid: Fid, tid: TableId) -> Self {
+        pub const fn [< create_ $name $("_" $log)?>](fid: Fid, tid: TableId) -> Self {
           Self(Entry::with_flags(ManifestEntryFlags::[< create_ $name $(_ $log)?>]().0, ManifestRecord::log(fid, tid)))
         }
 
@@ -282,7 +282,7 @@ macro_rules! manifest_entry_constructors {
         /// assert!(entry.flag().is_deletion());
         /// ```
         #[inline]
-        pub const fn [< delete_ $name _log>](fid: Fid, tid: TableId) -> Self {
+        pub const fn [< delete_ $name $("_" $log)?>](fid: Fid, tid: TableId) -> Self {
           Self(Entry::with_flags(ManifestEntryFlags::[< delete_ $name $(_ $log)?>]().0, ManifestRecord::log(fid, tid)))
         }
       }
@@ -297,8 +297,43 @@ impl ManifestEntry {
     ManifestEntryFlags(self.0.flag())
   }
 
+  /// Returns an instance which indicates a creation event for a table.
+  ///
+  /// ## Example
+  ///
+  /// ```rust
+  /// use lemondb_core::manifest::ManifestEntry;
+  ///
+  /// let entry = ManifestEntry::create_table(Default::default(), Default::default());
+  /// assert!(entry.flag().is_creation());
+  /// ```
+  #[inline]
+  pub const fn create_table(id: TableId, name: TableName) -> Self {
+    Self(Entry::with_flags(
+      ManifestEntryFlags::create_table().0,
+      ManifestRecord::table(id, name),
+    ))
+  }
+
+  /// Returns an instance which indicates a deletion event for a table.
+  ///
+  /// ## Example
+  ///
+  /// ```rust
+  /// use lemondb_core::manifest::ManifestEntry;
+  ///
+  /// let entry = ManifestEntry::delete_table(Default::default(), Default::default());
+  /// assert!(entry.flag().is_deletion());
+  /// ```
+  #[inline]
+  pub const fn delete_table(id: TableId, name: TableName) -> Self {
+    Self(Entry::with_flags(
+      ManifestEntryFlags::delete_table().0,
+      ManifestRecord::table(id, name),
+    ))
+  }
+
   manifest_entry_constructors!(
-    table,
     active log,
     frozen log,
     bloomfilter,
