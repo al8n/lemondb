@@ -360,6 +360,7 @@ impl ManifestEntry {
     ))
   }
 
+
   manifest_entry_constructors!(
     active log,
     frozen log,
