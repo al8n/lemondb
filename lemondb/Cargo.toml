@@ -1,0 +1,80 @@
+[package]
+name = "lemondb"
+version = "0.0.0"
+edition = "2021"
+repository = "https://github.com/al8n/lemondb"
+homepage = "https://github.com/al8n/lemondb"
+documentation = "https://docs.rs/lemondb"
+description = "A template for creating Rust open-source repo on GitHub"
+license = "MIT OR Apache-2.0"
+rust-version = "1.81"
+
+
+[features]
+default = ["std", "tracing"]
+std = [
+  "bytes/default",
+  "crossbeam-skiplist/default",
+  "either/default",
+  "skl/memmap",
+  "smol_str/default",
+  "thiserror",
+  "memmap2",
+  "fs4",
+  "indexmap/default",
+  "smallvec-wrapper/default",
+]
+ttl = ["std", "time"]
+
+[dependencies]
+aol.workspace = true 
+bytes.workspace = true
+crc32fast.workspace = true
+crossbeam-skiplist.workspace = true
+dbutils.workspace = true
+derive_more.workspace = true
+enum_dispatch.workspace = true
+either.workspace = true
+fs4 = { workspace = true, optional = true }
+indexmap.workspace = true
+memmap2 = { workspace = true, optional = true }
+once_cell.workspace = true
+orderwal.workspace = true
+valog.workspace = true
+dtlog.workspace = true
+parking_lot = { version = "0.12", optional = true }
+quick_cache = "0.6"
+skl.workspace = true 
+smallvec-wrapper.workspace = true
+smol_str.workspace = true
+thiserror = { workspace = true, optional = true }
+viewit.workspace = true
+zerocopy.workspace = true
+
+lemondb-core.workspace = true
+
+# sync
+oneshot = "0.1"
+crossbeam-channel = "0.5"
+
+time = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3"
+
+[profile.bench]
+opt-level = 3
+debug = false
+codegen-units = 1
+lto = 'thin'
+incremental = false
+debug-assertions = false
+overflow-checks = false
+rpath = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

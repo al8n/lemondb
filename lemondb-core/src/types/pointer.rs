@@ -1,0 +1,141 @@
+use core::mem;
+
+use dbutils::buffer::VacantBuffer;
+use valog::ValuePointer;
+
+use crate::error::{IncompleteBuffer, InsufficientBuffer};
+
+use super::fid::Fid;
+
+/// A pointer which points to an entry with a large value in value log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Pointer {
+  ptr: ValuePointer<Fid>,
+  tombstone: bool,
+}
+
+impl Pointer {
+  /// The encoded size of the pointer.
+  pub const ENCODED_LEN: usize = mem::size_of::<u64>() + mem::size_of::<u32>() * 2;
+
+  pub(crate) const FID_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for fid.
+  pub(crate) const TOMBSTONE_FLAG: u64 = 1 << 63; // 64th bit for tombstone mark
+
+  /// Creates a new `ValuePointer` with the given `offset` and `size`.
+  #[inline]
+  pub(crate) const fn new(ptr: ValuePointer<Fid>) -> Self {
+    Self {
+      ptr,
+      tombstone: ptr.is_tombstone(),
+    }
+  }
+
+  /// Returns the file id of the pointer.
+  #[inline]
+  pub const fn id(&self) -> Fid {
+    *self.ptr.id()
+  }
+
+  /// Returns the offset of the value.
+  #[inline]
+  pub const fn offset(&self) -> u32 {
+    self.ptr.offset()
+  }
+
+  /// Returns the size of the value.
+  #[inline]
+  pub const fn size(&self) -> u32 {
+    self.ptr.size()
+  }
+
+  /// Returns `true` if this pointer points to a tombstone entry.
+  #[inline]
+  pub const fn is_tombstone(&self) -> bool {
+    self.tombstone
+  }
+
+  /// Encodes the pointer into the given `buf`.
+  #[inline]
+  pub fn encode(&self, buf: &mut [u8]) -> Result<(), InsufficientBuffer> {
+    const ID_SIZE: usize = mem::size_of::<u64>();
+    const OFFSET_SIZE: usize = mem::size_of::<u32>();
+    const SIZE_SIZE: usize = mem::size_of::<u32>();
+
+    let buf_len = buf.len();
+    if buf_len < Self::ENCODED_LEN {
+      return Err(InsufficientBuffer::with_information(
+        Self::ENCODED_LEN,
+        buf_len,
+      ));
+    }
+
+    let mut fid: u64 = self.id().into();
+    if self.tombstone {
+      fid |= Self::TOMBSTONE_FLAG;
+    } else {
+      // clear the tombstone flag
+      fid &= Self::FID_MASK;
+    }
+
+    buf[..ID_SIZE].copy_from_slice(&fid.to_le_bytes());
+    buf[ID_SIZE..ID_SIZE + OFFSET_SIZE].copy_from_slice(&self.offset().to_le_bytes());
+    buf[ID_SIZE + OFFSET_SIZE..ID_SIZE + OFFSET_SIZE + SIZE_SIZE]
+      .copy_from_slice(&self.size().to_le_bytes());
+
+    Ok(())
+  }
+
+  /// Encodes the pointer into the given `buf`.
+  #[inline]
+  pub fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<(), InsufficientBuffer> {
+    let buf_len = buf.len();
+    if buf_len < Self::ENCODED_LEN {
+      return Err(InsufficientBuffer::with_information(
+        Self::ENCODED_LEN,
+        buf_len,
+      ));
+    }
+
+    let mut fid: u64 = self.id().into();
+    if self.tombstone {
+      fid |= Self::TOMBSTONE_FLAG;
+    } else {
+      // clear the tombstone flag
+      fid &= Self::FID_MASK;
+    }
+
+    buf.put_u64_le_unchecked(fid);
+    buf.put_u32_le_unchecked(self.offset());
+    buf.put_u32_le_unchecked(self.size());
+
+    Ok(())
+  }
+
+  /// Decodes a pointer from the given `buf`.
+  #[inline]
+  pub fn decode(buf: &[u8]) -> Result<Self, IncompleteBuffer> {
+    let buf_len = buf.len();
+    if buf_len < Self::ENCODED_LEN {
+      return Err(IncompleteBuffer::with_information(
+        Self::ENCODED_LEN,
+        buf_len,
+      ));
+    }
+
+    let mut id = u64::from_le_bytes([
+      buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ]);
+    let offset = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let size = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+
+    let tombstone = id & Self::TOMBSTONE_FLAG != 0;
+
+    // clear the tombstone flag
+    id &= Self::FID_MASK;
+
+    Ok(Self {
+      ptr: ValuePointer::new(id.try_into().unwrap(), offset, size),
+      tombstone,
+    })
+  }
+}
