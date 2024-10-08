@@ -18,6 +18,8 @@ pub mod options;
 // mod db;
 // pub use db::*;
 
+mod table;
+
 /// Utility functions.
 pub mod util;
 
