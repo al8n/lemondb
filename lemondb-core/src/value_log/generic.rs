@@ -6,7 +6,7 @@ use among::Among;
 use dbutils::{
   buffer::VacantBuffer,
   checksum::{BuildChecksumer, Crc32},
-  traits::Type,
+  types::Type,
 };
 use valog::{error::Error, LogReaderExt, LogWriterExt, ValueBuilder};
 
@@ -14,11 +14,11 @@ mod entry;
 use entry::{GenericEntry, GenericEntryRef, PhantomGenericEntry};
 
 /// A generic value log that is lock-free, concurrent safe, and can be used in multi-threaded environments.
-pub struct GenericValueLog<K: ?Sized, V: ?Sized, C = Crc32> {
+pub struct ValueLog<K: ?Sized, V: ?Sized, C = Crc32> {
   log: ValueLogCore<PhantomGenericEntry<K, V>, C>,
 }
 
-impl<K, V, C> GenericValueLog<K, V, C>
+impl<K, V, C> ValueLog<K, V, C>
 where
   K: core::fmt::Debug + Type + ?Sized,
   V: core::fmt::Debug + Type + ?Sized,

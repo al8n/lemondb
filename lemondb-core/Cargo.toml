@@ -15,6 +15,7 @@ ttl = ["std", "time"]
 arbitrary-int = { version = "1.2", default-features = false }
 among.workspace = true
 aol.workspace = true
+bitflags.workspace = true
 derive_more.workspace = true
 dbutils.workspace = true
 dtlog.workspace = true

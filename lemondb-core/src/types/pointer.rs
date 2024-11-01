@@ -64,8 +64,8 @@ impl Pointer {
     let buf_len = buf.len();
     if buf_len < Self::ENCODED_LEN {
       return Err(InsufficientBuffer::with_information(
-        Self::ENCODED_LEN,
-        buf_len,
+        Self::ENCODED_LEN as u64,
+        buf_len as u64,
       ));
     }
 
@@ -91,8 +91,8 @@ impl Pointer {
     let buf_len = buf.len();
     if buf_len < Self::ENCODED_LEN {
       return Err(InsufficientBuffer::with_information(
-        Self::ENCODED_LEN,
-        buf_len,
+        Self::ENCODED_LEN as u64,
+        buf_len as u64,
       ));
     }
 
@@ -117,8 +117,8 @@ impl Pointer {
     let buf_len = buf.len();
     if buf_len < Self::ENCODED_LEN {
       return Err(IncompleteBuffer::with_information(
-        Self::ENCODED_LEN,
-        buf_len,
+        Self::ENCODED_LEN as u64,
+        buf_len as u64,
       ));
     }
 

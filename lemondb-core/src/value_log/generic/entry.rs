@@ -7,7 +7,7 @@ use super::{
 
 use dbutils::{
   buffer::VacantBuffer,
-  traits::{Type, TypeRef},
+  types::{Type, TypeRef},
 };
 use skl::either::Either;
 

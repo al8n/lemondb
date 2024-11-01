@@ -1,41 +1,59 @@
-use core::{cmp, marker::PhantomData};
+use core::cmp;
 
-use dbutils::{buffer::VacantBuffer, traits::Type, StaticComparator};
+use dbutils::{buffer::VacantBuffer, error::InsufficientBuffer, types::Type};
 
-use super::{key_ref::KeyRef, meta::Meta};
+use super::{active_meta::ActiveMeta, key_ref::KeyRef};
 
-/// An internal key.
-pub struct Key<C> {
-  pub(super) meta: Meta,
-  _phantom: PhantomData<C>,
-  pub(super) data: [u8],
+/// Encodes an error that occurred during encoding [`Key`].
+pub enum EncodeError<K: ?Sized + Type> {
+  /// The actual encoding error of `K`.
+  Key(K::Error),
+  /// The buffer is insufficient to encode the [`Key`].
+  InsufficientBuffer(InsufficientBuffer),
 }
 
-impl<C: StaticComparator> PartialEq for Key<C> {
+/// An internal generic key.
+pub struct Key<K: ?Sized> {
+  pub(super) meta: ActiveMeta,
+  pub(super) data: K,
+}
+
+impl<K> PartialEq for Key<K>
+where
+  K: ?Sized + PartialEq,
+{
   #[inline]
   fn eq(&self, other: &Self) -> bool {
-    self.meta.raw() == other.meta.raw() && self.data.eq(&other.data)
+    self.data.eq(&other.data)
   }
 }
 
-impl<C: StaticComparator> Eq for Key<C> {}
+impl<K> Eq for Key<K> where K: ?Sized + Eq {}
 
-impl<C: StaticComparator> PartialOrd for Key<C> {
+impl<K> PartialOrd for Key<K>
+where
+  K: ?Sized + Ord,
+{
   #[inline]
   fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
     Some(self.cmp(other))
   }
 }
 
-impl<C: StaticComparator> Ord for Key<C> {
+impl<K> Ord for Key<K>
+where
+  K: ?Sized + Ord,
+{
   #[inline]
   fn cmp(&self, other: &Self) -> cmp::Ordering {
-    C::compare(&self.data, &other.data).then_with(|| other.meta.version().cmp(&self.meta.version()))
-    // make sure latest version at the front
+    self.data.cmp(&other.data)
   }
 }
 
-impl<C> core::fmt::Debug for Key<C> {
+impl<K> core::fmt::Debug for Key<K>
+where
+  K: ?Sized + core::fmt::Debug,
+{
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Key")
       .field("meta", &self.meta)
@@ -44,32 +62,30 @@ impl<C> core::fmt::Debug for Key<C> {
   }
 }
 
-impl<C> Type for Key<C> {
-  type Ref<'a> = KeyRef<'a, C>;
+impl<K> Type for Key<K>
+where
+  K: ?Sized + Type,
+{
+  type Ref<'a> = KeyRef<'a, K>;
 
-  type Error = ();
+  type Error = EncodeError<K>;
 
   #[inline]
   fn encoded_len(&self) -> usize {
-    self.data.len() + Meta::SIZE
-  }
-
-  #[inline]
-  fn encode(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-    let len = self.data.len();
-    buf[..len].copy_from_slice(&self.data);
-    buf[len..len + Meta::VERSION_SIZE].copy_from_slice(&self.meta.raw().to_le_bytes());
-    buf[len + Meta::VERSION_SIZE..len + Meta::SIZE]
-      .copy_from_slice(&self.meta.expire_at().to_le_bytes());
-    Ok(len + Meta::SIZE)
+    K::encoded_len(&self.data) + ActiveMeta::SIZE
   }
 
   #[inline]
   fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
-    buf.put_slice_unchecked(&self.data);
-    buf.put_u64_le_unchecked(self.meta.raw());
-    #[cfg(feature = "ttl")]
-    buf.put_u64_le_unchecked(self.meta.expire_at());
-    Ok(self.data.len() + Meta::SIZE)
+    buf
+      .put_slice(&self.meta.encode())
+      .map_err(EncodeError::InsufficientBuffer)
+      .and_then(|_| {
+        self
+          .data
+          .encode_to_buffer(buf)
+          .map(|klen| klen + ActiveMeta::SIZE)
+          .map_err(EncodeError::Key)
+      })
   }
 }

@@ -1,65 +1,41 @@
 use core::{cmp, marker::PhantomData};
+use dbutils::{
+  equivalent::{Comparable, Equivalent},
+  types::Type,
+};
 
-use super::meta::Meta;
+use super::key_ref::KeyRef;
 
-/// An internal generic key for querying.
-pub struct Query<'a, Q: ?Sized, K: ?Sized> {
-  pub(super) meta: Meta,
-  pub(super) key: &'a Q,
-  _phantom: PhantomData<K>,
+/// A type for flexible lookup.
+#[derive(ref_cast::RefCast)]
+#[repr(transparent)]
+pub struct Query<'a, K, Q>
+where
+  K: ?Sized,
+  Q: ?Sized,
+{
+  _k: PhantomData<&'a K>,
+  key: Q,
 }
 
-impl<'a, Q: ?Sized, K: ?Sized> Query<'a, Q, K> {
-  /// Creates a new `Query`.
+impl<'a, K, Q> Equivalent<KeyRef<'a, K>> for Query<'a, K, Q>
+where
+  K: Type + ?Sized,
+  Q: ?Sized + Equivalent<K::Ref<'a>>,
+{
   #[inline]
-  pub fn new(meta: Meta, key: &'a Q) -> Self {
-    Self {
-      meta,
-      key,
-      _phantom: PhantomData,
-    }
+  fn equivalent(&self, p: &KeyRef<'a, K>) -> bool {
+    self.key.equivalent(p.key())
   }
 }
 
-impl<Q, K> PartialEq for Query<'_, Q, K>
+impl<'a, K, Q> Comparable<KeyRef<'a, K>> for Query<'a, K, Q>
 where
-  Q: ?Sized + PartialEq,
-  K: ?Sized,
+  K: Type + ?Sized,
+  Q: ?Sized + Comparable<K::Ref<'a>>,
 {
   #[inline]
-  fn eq(&self, other: &Self) -> bool {
-    self.meta.raw() == other.meta.raw() && self.key.eq(other.key)
-  }
-}
-
-impl<Q, K> Eq for Query<'_, Q, K>
-where
-  Q: ?Sized + Eq,
-  K: ?Sized,
-{
-}
-
-impl<Q, K> PartialOrd for Query<'_, Q, K>
-where
-  K: ?Sized,
-  Q: ?Sized + Ord,
-{
-  #[inline]
-  fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-    Some(self.cmp(other))
-  }
-}
-
-impl<Q, K> Ord for Query<'_, Q, K>
-where
-  K: ?Sized,
-  Q: ?Sized + Ord,
-{
-  #[inline]
-  fn cmp(&self, other: &Self) -> cmp::Ordering {
-    self
-      .key
-      .cmp(other.key)
-      .then_with(|| other.meta.version().cmp(&self.meta.version())) // in this way, we can make sure the latest version is at the front
+  fn compare(&self, p: &KeyRef<'a, K>) -> cmp::Ordering {
+    self.key.compare(p.key())
   }
 }

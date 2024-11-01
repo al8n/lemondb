@@ -1,83 +1,115 @@
-use core::{cmp, marker::PhantomData};
+use core::cmp;
 
 use dbutils::{
   equivalent::{Comparable, Equivalent},
-  traits::TypeRef,
-  StaticComparator,
+  types::{KeyRef as TKeyRef, Type, TypeRef},
 };
 
-use super::{key::Key, meta::Meta, query::Query};
+use super::{active_meta::ActiveMeta, key::Key};
 
 /// A reference to a internal key.
-pub struct KeyRef<'a, C> {
-  meta: Meta,
-  data: &'a [u8],
-  _phantom: PhantomData<C>,
+pub struct KeyRef<'a, K>
+where
+  K: ?Sized + Type,
+{
+  meta: ActiveMeta,
+  data: K::Ref<'a>,
 }
 
-impl<'a, C> KeyRef<'a, C> {
-  /// Creates a new `KeyRef` with the given `meta` and `data`.
+impl<K> Clone for KeyRef<'_, K>
+where
+  K: ?Sized + Type,
+{
   #[inline]
-  pub fn new(meta: Meta, data: &'a [u8]) -> Self {
+  fn clone(&self) -> Self {
     Self {
-      meta,
-      data,
-      _phantom: PhantomData,
+      meta: self.meta,
+      data: self.data,
     }
   }
+}
 
-  /// Returns the version of this key reference.
-  #[inline]
-  pub const fn version(&self) -> u64 {
-    self.meta.version()
-  }
+impl<K> Copy for KeyRef<'_, K> where K: ?Sized + Type {}
+
+impl<'a, K> KeyRef<'a, K>
+where
+  K: ?Sized + Type,
+{
+  // /// Creates a new `KeyRef` with the given `meta` and `data`.
+  // #[inline]
+  // pub fn new(meta: Meta, data: &K) -> Self {
+  //   Self {
+  //     meta,
+  //     data,
+  //   }
+  // }
 
   /// Returns the expiration time of this key reference.
-  #[inline]
   #[cfg(feature = "ttl")]
   #[cfg_attr(docsrs, doc(cfg(feature = "ttl")))]
+  #[inline]
   pub const fn expire_at(&self) -> u64 {
     self.meta.expire_at()
   }
 
   /// Returns the `key` of the `KeyRef`.
   #[inline]
-  pub const fn key(&self) -> &[u8] {
-    self.data
+  pub const fn key(&self) -> &K::Ref<'a> {
+    &self.data
+  }
+
+  /// Consumes the `KeyRef` and returns the `meta` and the `K`.
+  #[inline]
+  pub fn into_components(self) -> (ActiveMeta, K::Ref<'a>) {
+    (self.meta, self.data)
   }
 }
 
-impl<C> PartialEq for KeyRef<'_, C> {
+impl<'a, K> PartialEq for KeyRef<'a, K>
+where
+  K: ?Sized + Type,
+  K::Ref<'a>: PartialEq,
+{
   #[inline]
   fn eq(&self, other: &Self) -> bool {
-    self.data.eq(other.data) && self.meta.version() == other.meta.version()
+    self.data.eq(&other.data)
   }
 }
 
-impl<C> Eq for KeyRef<'_, C> {}
-
-impl<C> PartialOrd for KeyRef<'_, C>
+impl<'a, K> Eq for KeyRef<'a, K>
 where
-  C: StaticComparator,
+  K: ?Sized + Type,
+  K::Ref<'a>: Eq,
+{
+}
+
+impl<'a, K> PartialOrd for KeyRef<'a, K>
+where
+  K: ?Sized + Type,
+  K::Ref<'a>: PartialOrd,
 {
   #[inline]
   fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-    Some(self.cmp(other))
+    self.data.partial_cmp(&other.data)
   }
 }
 
-impl<C> Ord for KeyRef<'_, C>
+impl<'a, K> Ord for KeyRef<'a, K>
 where
-  C: StaticComparator,
+  K: ?Sized + Type,
+  K::Ref<'a>: Ord,
 {
   #[inline]
   fn cmp(&self, other: &Self) -> cmp::Ordering {
-    C::compare(self.data, other.data).then_with(|| other.meta.version().cmp(&self.meta.version()))
-    // make sure latest version at the front
+    self.data.cmp(&other.data)
   }
 }
 
-impl<C> core::fmt::Debug for KeyRef<'_, C> {
+impl<K> core::fmt::Debug for KeyRef<'_, K>
+where
+  K: ?Sized + Type,
+  for<'a> K::Ref<'a>: core::fmt::Debug,
+{
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct(core::any::type_name::<Self>())
       .field("meta", &self.meta)
@@ -86,23 +118,47 @@ impl<C> core::fmt::Debug for KeyRef<'_, C> {
   }
 }
 
-impl<'a, C> TypeRef<'a> for KeyRef<'a, C> {
+impl<'a, K> TypeRef<'a> for KeyRef<'a, K>
+where
+  K: ?Sized + Type,
+{
   #[inline]
   unsafe fn from_slice(buf: &'a [u8]) -> Self {
-    let len = buf.len();
-    let key_end = len - Meta::SIZE;
-    let meta = Meta::decode(&buf[key_end..]);
-    let data = &buf[..key_end];
+    let meta = ActiveMeta::decode(buf);
+    let data = &buf[ActiveMeta::SIZE..];
 
     Self {
       meta,
-      data,
-      _phantom: PhantomData,
+      data: <K::Ref<'_> as TypeRef<'_>>::from_slice(data),
     }
   }
 }
 
-impl<C: StaticComparator> dbutils::traits::KeyRef<'_, Key<C>> for KeyRef<'_, C> {
+impl<'a, K> Equivalent<Key<K>> for KeyRef<'a, K>
+where
+  K: ?Sized + Type + Equivalent<K::Ref<'a>>,
+{
+  #[inline]
+  fn equivalent(&self, key: &Key<K>) -> bool {
+    key.data.equivalent(&self.data)
+  }
+}
+
+impl<'a, K> Comparable<Key<K>> for KeyRef<'a, K>
+where
+  K: ?Sized + Type + Comparable<K::Ref<'a>>,
+{
+  #[inline]
+  fn compare(&self, key: &Key<K>) -> cmp::Ordering {
+    Comparable::compare(&key.data, &self.data).reverse()
+  }
+}
+
+impl<'a, K> TKeyRef<'a, Key<K>> for KeyRef<'a, K>
+where
+  K: ?Sized + Type + Comparable<K::Ref<'a>>,
+  K::Ref<'a>: TKeyRef<'a, K>,
+{
   #[inline]
   fn compare<Q>(&self, a: &Q) -> cmp::Ordering
   where
@@ -113,67 +169,32 @@ impl<C: StaticComparator> dbutils::traits::KeyRef<'_, Key<C>> for KeyRef<'_, C> 
 
   #[inline]
   unsafe fn compare_binary(a: &[u8], b: &[u8]) -> cmp::Ordering {
-    let alen = a.len();
-    let blen = b.len();
+    let ak = &a[ActiveMeta::SIZE..];
+    let bk = &b[ActiveMeta::SIZE..];
 
-    let ak = &a[..alen - Meta::SIZE];
-    let av = Meta::decode_version(&a[alen - Meta::SIZE..]);
-    let bk = &b[..blen - Meta::SIZE];
-    let bv = Meta::decode_version(&b[blen - Meta::SIZE..]);
-
-    C::compare(ak, bk).then_with(|| bv.cmp(&av)) // make sure latest version at the front
+    <K::Ref<'_> as TKeyRef<'_, K>>::compare_binary(ak, bk)
   }
 }
 
-impl<C> Equivalent<Key<C>> for KeyRef<'_, C> {
-  fn equivalent(&self, key: &Key<C>) -> bool {
-    self.meta.version() == key.meta.version() && self.data.eq(&key.data)
-  }
-}
+// impl<'a, 'b: 'a, Q, K> Equivalent<KeyRef<K::Ref<'a>>> for Query<'b, Q, K>
+// where
+//   K: Type + Ord + ?Sized,
+//   Q: ?Sized + Ord + Equivalent<K::Ref<'a>>,
+// {
+//   #[inline]
+//   fn equivalent(&self, key: &KeyRef<K::Ref<'a>>) -> bool {
+//     self.key.equivalent(&key.data) && self.meta.version() == key.version()
+//   }
+// }
 
-impl<C> Comparable<Key<C>> for KeyRef<'_, C>
-where
-  C: StaticComparator,
-{
-  fn compare(&self, key: &Key<C>) -> std::cmp::Ordering {
-    C::compare(self.data, &key.data).then_with(|| key.meta.version().cmp(&self.meta.version()))
-    // make sure latest version at the front
-  }
-}
-
-impl<'a, C> Equivalent<KeyRef<'a, C>> for Key<C> {
-  fn equivalent(&self, key: &KeyRef<'a, C>) -> bool {
-    key.meta.version() == self.meta.version() && key.data.eq(&self.data)
-  }
-}
-
-impl<'a, C> Comparable<KeyRef<'a, C>> for Key<C>
-where
-  C: StaticComparator,
-{
-  fn compare(&self, key: &KeyRef<'a, C>) -> std::cmp::Ordering {
-    C::compare(&self.data, key.data).then_with(|| key.meta.version().cmp(&self.meta.version()))
-    // make sure latest version at the front
-  }
-}
-
-impl<C> Equivalent<KeyRef<'_, C>> for Query<'_, [u8], Key<C>>
-where
-  C: StaticComparator,
-{
-  #[inline]
-  fn equivalent(&self, key: &KeyRef<'_, C>) -> bool {
-    C::compare(self.key, key.data).is_eq() && self.meta.version() == key.version()
-  }
-}
-
-impl<C> Comparable<KeyRef<'_, C>> for Query<'_, [u8], Key<C>>
-where
-  C: StaticComparator,
-{
-  #[inline]
-  fn compare(&self, key: &KeyRef<'_, C>) -> cmp::Ordering {
-    C::compare(self.key, key.data).then_with(|| key.meta.version().cmp(&self.meta.version()))
-    // make sure latest version at the front
-  }
-}
+// impl<'a, 'b: 'a, Q, K> Comparable<KeyRef<K::Ref<'a>>> for Query<'b, Q, K>
+// where
+//   K: Type + Ord + ?Sized,
+//   Q: ?Sized + Ord + Comparable<K::Ref<'a>>,
+// {
+//   #[inline]
+//   fn compare(&self, key: &KeyRef<K::Ref<'a>>) -> cmp::Ordering {
+//     Comparable::compare(self.key, &key.data)
+//       .then_with(move || key.meta.version().cmp(&self.meta.version())) // make sure latest version at the front
+//   }
+// }

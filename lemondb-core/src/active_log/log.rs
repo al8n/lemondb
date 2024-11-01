@@ -1,4 +1,4 @@
-use dbutils::{checksum::BuildChecksumer, traits::Type, Ascend, CheapClone, StaticComparator};
+use dbutils::{checksum::BuildChecksumer, types::Type, Ascend, CheapClone, StaticComparator};
 
 use either::Either;
 use orderwal::{

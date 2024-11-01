@@ -5,7 +5,7 @@ use super::{
   VMeta,
 };
 
-use dbutils::traits::{Type, TypeRef};
+use dbutils::types::{Type, TypeRef};
 
 pub(super) struct PhantomEntry;
 

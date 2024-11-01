@@ -5,7 +5,7 @@ use super::{Meta, VMeta, ValueLogCore};
 use dbutils::{
   buffer::VacantBuffer,
   checksum::{BuildChecksumer, Crc32},
-  traits::Type,
+  types::Type,
 };
 use valog::{error::Error, LogReaderExt, LogWriterExt, ValueBuilder};
 

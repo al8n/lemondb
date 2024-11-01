@@ -3,7 +3,11 @@ use std::sync::Arc;
 use aol::checksum::BuildChecksumer;
 use crossbeam_skiplist::SkipMap;
 use lemondb_core::{
-  active_log::log::{ActiveLogFile, ActiveLogFileReader}, immutable_log::ImmutableLogFile, manifest::ManifestFile, types::{fid::Fid, key::Key, table_id::TableId, table_name::TableName}, value_log::ValueLog
+  active_log::log::{ActiveLogFile, ActiveLogFileReader},
+  immutable_log::ImmutableLogFile,
+  manifest::ManifestFile,
+  types::{fid::Fid, key::Key, table_id::TableId, table_name::TableName},
+  value_log::ValueLog,
 };
 use parking_lot::Mutex;
 use skl::Comparator;
@@ -18,17 +22,15 @@ pub(crate) struct Table<C> {
 
 impl<C> Table<C> {
   // pub(crate) fn read(&self, version: u64, key: &[u8]) {
-    
+
   //   self.active_logs.iter().find_map(|f| {
   //     let reader = f.value();
   //     if reader.get(version) {
-      
+
   //     }
   //   });
   // }
 }
-
-
 
 // /// a
 // pub struct TableWriter {
@@ -51,6 +53,6 @@ impl<C> Table<C> {
 
 // impl Table {
 //   pub(crate) fn insert(&mut self) {
-    
+
 //   }
 // }

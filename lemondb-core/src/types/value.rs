@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use among::Among;
 use dbutils::{
   buffer::VacantBuffer,
-  traits::{Type, TypeRef},
+  types::{MaybeStructured, Type, TypeRef},
 };
 
 use skl::either::Either;
@@ -11,16 +11,16 @@ use skl::either::Either;
 use super::pointer::Pointer;
 
 ///  value.
-pub struct PhantomValue(PhantomData<[u8]>);
+pub struct PhantomValue<V: ?Sized>(PhantomData<V>);
 
-impl core::fmt::Debug for PhantomValue {
+impl<V: ?Sized> core::fmt::Debug for PhantomValue<V> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Value").finish()
   }
 }
 
-impl Type for PhantomValue {
-  type Ref<'a> = ValueRef<'a>;
+impl<V: ?Sized + Type> Type for PhantomValue<V> {
+  type Ref<'a> = ValueRef<'a, V>;
 
   type Error = ();
 
@@ -43,87 +43,63 @@ impl Type for PhantomValue {
   }
 }
 
-/// The  value store in the database.
-pub struct Value<'a>(Among<(), &'a [u8], Pointer>);
+/// The generic value store in the database.
+pub struct Value<'a, V: ?Sized>(Either<MaybeStructured<'a, V>, Pointer>);
 
-impl core::fmt::Debug for Value<'_> {
+impl<V> core::fmt::Debug for Value<'_, V>
+where
+  V: ?Sized + Type + core::fmt::Debug,
+{
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self.0 {
-      Among::Left(_) => f.debug_tuple("Value").field(&()).finish(),
-      Among::Middle(ref value) => f.debug_tuple("Value").field(value).finish(),
-      Among::Right(ref pointer) => f.debug_tuple("Value").field(pointer).finish(),
+      Either::Left(ref value) => match value.data() {
+        Either::Left(ref data) => f.debug_tuple("Value").field(data).finish(),
+        Either::Right(ref raw) => f.debug_tuple("Value").field(raw).finish(),
+      },
+      Either::Right(ref pointer) => f.debug_tuple("Value").field(pointer).finish(),
     }
   }
 }
 
-impl<'a> Value<'a> {
-  /// Creates a new  value.
+impl<'a, V: ?Sized> Value<'a, V> {
+  /// Creates a new generic value.
   #[inline]
-  pub fn new(value: Option<Either<&'a [u8], Pointer>>) -> Self {
-    match value {
-      None => Self(Among::Left(())),
-      Some(Either::Left(a)) => Self(Among::Middle(a)),
-      Some(Either::Right(b)) => Self(Among::Right(b)),
-    }
+  pub fn new(value: Either<MaybeStructured<'a, V>, Pointer>) -> Self {
+    Self(value)
   }
 
-  /// Adds a pointer to the  value.
+  /// Adds a pointer to the generic value.
   #[inline]
   pub fn with_pointer(self, pointer: Pointer) -> Self {
-    Self(Among::Right(pointer))
+    Self(Either::Right(pointer))
   }
 }
 
-impl Type for Value<'_> {
-  type Ref<'b> = ValueRef<'b>;
+impl<V> Type for Value<'_, V>
+where
+  V: ?Sized + Type,
+{
+  type Ref<'b> = ValueRef<'b, V>;
 
-  type Error = ();
+  // TODO: error optimization
+  type Error = V::Error;
 
   #[inline]
   fn encoded_len(&self) -> usize {
     1 + match self.0 {
-      Among::Left(_) => 0,
-      Among::Middle(value) => value.len(),
-      Among::Right(_) => Pointer::ENCODED_LEN,
-    }
-  }
-
-  #[inline]
-  fn encode(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-    match self.0 {
-      Among::Left(_) => {
-        buf[0] = 0;
-        Ok(1)
-      }
-      Among::Middle(value) => {
-        buf[0] = 1;
-        let vlen = value.len();
-        buf[1..1 + vlen].copy_from_slice(value);
-        Ok(1 + vlen)
-      }
-      Among::Right(ref pointer) => {
-        buf[0] = 2;
-        pointer
-          .encode(&mut buf[1..])
-          .expect("not enough space to encode pointer");
-        Ok(1 + Pointer::ENCODED_LEN)
-      }
+      Either::Left(ref value) => value.encoded_len(),
+      Either::Right(_) => Pointer::ENCODED_LEN,
     }
   }
 
   #[inline]
   fn encode_to_buffer(&self, buf: &mut VacantBuffer<'_>) -> Result<usize, Self::Error> {
     match self.0 {
-      Among::Left(_) => {
-        buf.put_u8_unchecked(0);
-        Ok(1)
-      }
-      Among::Middle(value) => {
+      Either::Left(ref value) => {
         buf.put_u8_unchecked(1);
-        buf.put_slice_unchecked(value);
-        Ok(1 + value.len())
+        value.encode_to_buffer(buf).map(|len| 1 + len)
       }
-      Among::Right(ref pointer) => {
+      Either::Right(ref pointer) => {
         buf.put_u8_unchecked(2);
         pointer
           .encode_to_buffer(buf)
@@ -134,12 +110,25 @@ impl Type for Value<'_> {
   }
 }
 
-/// The value reference to the value log.
-pub struct ValueRef<'a> {
-  value: Among<(), &'a [u8], Pointer>,
+/// The generic value reference to the value log.
+pub struct ValueRef<'a, V: ?Sized + Type> {
+  value: Among<(), V::Ref<'a>, Pointer>,
 }
 
-impl core::fmt::Debug for ValueRef<'_> {
+impl<V: ?Sized + Type> Clone for ValueRef<'_, V> {
+  #[inline]
+  fn clone(&self) -> Self {
+    *self
+  }
+}
+
+impl<V: ?Sized + Type> Copy for ValueRef<'_, V> {}
+
+impl<'a, V> core::fmt::Debug for ValueRef<'a, V>
+where
+  V: ?Sized + Type,
+  V::Ref<'a>: core::fmt::Debug,
+{
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match &self.value {
       Among::Left(_) => f.debug_tuple("Value").field(&()).finish(),
@@ -149,12 +138,15 @@ impl core::fmt::Debug for ValueRef<'_> {
   }
 }
 
-impl<'a> TypeRef<'a> for ValueRef<'a> {
+impl<'a, V> TypeRef<'a> for ValueRef<'a, V>
+where
+  V: ?Sized + Type,
+{
   #[inline]
   unsafe fn from_slice(buf: &'a [u8]) -> Self {
     let value = match buf[0] {
       0 => Among::Left(()),
-      1 => Among::Middle(&buf[1..]),
+      1 => Among::Middle(V::Ref::from_slice(&buf[1..])),
       2 => Among::Right(Pointer::decode(&buf[1..]).unwrap()),
       _ => unreachable!(),
     };

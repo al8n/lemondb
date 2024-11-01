@@ -9,6 +9,7 @@ rust-version = "1.81.0"
 among = "0.1"
 ahash = { version = "0.8", default-features = false }
 bytes = { version = "1", default-features = false }
+bitflags = { version = "2" }
 crc32fast = "1"
 crossbeam-skiplist = { version = "0.1", default-features = false }
 derive_more = "0.99"
@@ -22,16 +23,16 @@ memmap2 = "0.9"
 once_cell = { version = "1", default-features = false }
 
 # utils
-dbutils = { version = "0.6", default-features = false, features = ["default"] }
+dbutils = { version = "0.9", default-features = false, features = ["default"] }
 paste = "1"
 zerocopy = { version = "0.8", features = ["derive"] }
 
 # write ahead logs
 aol = { version = "0.3", default-features = false, features = ["std"] }
 dtlog = { version = "0.1", default-features = false, features = ["memmap"] }
-orderwal = { version = "0.4", default-features = false, features = ["std"] }
-skl = { version = "0.16", default-features = false, features = ["memmap"] }
-valog = { version = "0.1", default-features = false, features = ["memmap"] }
+orderwal = { version = "0.5", path = "../orderwal", default-features = false, features = ["std"] }
+skl = { version = "0.18", default-features = false, features = ["memmap"] }
+valog = { version = "0.2", default-features = false, features = ["memmap"] }
 ref-cast = "1"
 
 smallvec-wrapper = { version = "0.1", default-features = false, features = ["const_new"] }

@@ -1,5 +1,5 @@
 use among::Among;
-use dbutils::{checksum::BuildChecksumer, equivalent::Comparable, traits::Type};
+use dbutils::{checksum::BuildChecksumer, equivalent::Comparable, types::Type};
 use either::Either;
 use orderwal::{
   error::Error as ActiveLogError,
@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::types::{
   generic_entry_ref::GenericEntryRef,
-  generic_key::GenericKey,
-  generic_value::{GenericValue, PhantomGenericValue},
+  generic_key::Key,
+  generic_value::{Value, PhantomValue},
   meta::Meta,
   pointer::Pointer,
   query::Query,
@@ -214,13 +214,13 @@ where
 }
 
 struct Inner<K: ?Sized, V: ?Sized, S = Crc32> {
-  reader: GenericOrderWalReader<GenericKey<K>, PhantomGenericValue<V>, S>,
+  reader: GenericOrderWalReader<Key<K>, PhantomValue<V>, S>,
   max_version: AtomicU64,
   min_version: AtomicU64,
 }
 
 impl<K: ?Sized, V: ?Sized, S> core::ops::Deref for Inner<K, V, S> {
-  type Target = GenericOrderWalReader<GenericKey<K>, PhantomGenericValue<V>, S>;
+  type Target = GenericOrderWalReader<Key<K>, PhantomValue<V>, S>;
 
   #[inline]
   fn deref(&self) -> &Self::Target {
@@ -231,7 +231,7 @@ impl<K: ?Sized, V: ?Sized, S> core::ops::Deref for Inner<K, V, S> {
 /// The active log file.
 pub struct ActiveLogFile<K: ?Sized, V: ?Sized, S = Crc32> {
   inner: Arc<Inner<K, V, S>>,
-  writer: GenericOrderWal<GenericKey<K>, PhantomGenericValue<V>, S>,
+  writer: GenericOrderWal<Key<K>, PhantomValue<V>, S>,
   max_key_size: u32,
   max_value_size: u32,
 }
@@ -286,7 +286,7 @@ where
       }));
     }
 
-    let value = GenericValue::new(value);
+    let value = Value::new(value);
     let vlen = value.encoded_len();
     if vlen > self.max_value_size as usize {
       return Err(Among::Right(ActiveLogError::ValueTooLarge {

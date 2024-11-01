@@ -22,14 +22,14 @@ use zerocopy::FromBytes;
 ///   ```
 #[derive(Copy, Clone, Eq, PartialEq, FromBytes)]
 #[repr(C, align(8))]
-pub struct Meta {
+pub struct ImmutableMeta {
   /// 63 bits for version, 1 bit for value pointer mark
   meta: u64,
   #[cfg(feature = "ttl")]
   expire_at: u64,
 }
 
-impl core::fmt::Debug for Meta {
+impl core::fmt::Debug for ImmutableMeta {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     #[cfg(feature = "ttl")]
     return self
@@ -42,7 +42,7 @@ impl core::fmt::Debug for Meta {
   }
 }
 
-impl Meta {
+impl ImmutableMeta {
   /// The size of the metadata.
   pub const SIZE: usize = core::mem::size_of::<Self>();
   /// The size of the version.
@@ -56,7 +56,7 @@ impl Meta {
     &'a self,
     f: &'a mut core::fmt::Formatter<'b>,
   ) -> core::fmt::DebugStruct<'a, 'b> {
-    let mut s = f.debug_struct("Meta");
+    let mut s = f.debug_struct("ImmutableMeta");
     s.field("version", &self.version())
       .field("pointer", &self.is_pointer());
     s
@@ -65,7 +65,7 @@ impl Meta {
   /// Decodes a version from the given buffer.
   ///
   /// ## Panics
-  /// - If the buffer is less than `Meta::VERSION_SIZE`.
+  /// - If the buffer is less than `ImmutableMeta::VERSION_SIZE`.
   #[inline]
   pub fn decode_version(buf: &[u8]) -> u64 {
     u64::from_le_bytes(<[u8; Self::VERSION_SIZE]>::try_from(&buf[..Self::VERSION_SIZE]).unwrap())
@@ -75,7 +75,7 @@ impl Meta {
   /// Decodes a metadata from the given buffer.
   ///
   /// ## Panics
-  /// - If the buffer is less than `Meta::SIZE`.
+  /// - If the buffer is less than `ImmutableMeta::SIZE`.
   #[inline]
   pub(crate) fn decode(buf: &[u8]) -> Self {
     let raw = u64::from_le_bytes([
@@ -94,7 +94,7 @@ impl Meta {
   }
 }
 
-impl Meta {
+impl ImmutableMeta {
   /// The maximum version.
   pub const MAX_VERSION: u64 = (1 << 63) - 1;
   pub(crate) const VERSION_MASK: u64 = !0u64 >> 1; // 0xFFFFFFFFFFFFFFFE // 63 bits for version
@@ -169,7 +169,7 @@ impl Meta {
   }
 }
 
-impl Trailer for Meta {
+impl Trailer for ImmutableMeta {
   #[cfg(feature = "ttl")]
   #[inline]
   fn is_valid(&self) -> bool {
