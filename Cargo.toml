@@ -30,8 +30,8 @@ zerocopy = { version = "0.8", features = ["derive"] }
 # write ahead logs
 aol = { version = "0.3", default-features = false, features = ["std"] }
 dtlog = { version = "0.1", default-features = false, features = ["memmap"] }
-orderwal = { version = "0.5", path = "../orderwal", default-features = false, features = ["std"] }
-skl = { version = "0.18", default-features = false, features = ["memmap"] }
+orderwal = { version = "0.5", default-features = false, features = ["std"] }
+skl = { version = "0.19", default-features = false, features = ["memmap"] }
 valog = { version = "0.2", default-features = false, features = ["memmap"] }
 ref-cast = "1"
 
